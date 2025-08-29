@@ -226,8 +226,10 @@ app.post('/api/recordings/save', upload.single('audio'), async (req, res) => {
     // ✅ Rename the file with proper ayat index
     const properFileName = `ayat_${parseInt(ayatIndex) + 1}_${Date.now()}.webm`;
     const oldPath = req.file.path;
-    const newPath = path.join('uploads', properFileName);
-    
+    //const newPath = path.join('uploads', properFileName);
+    let newPath = path.join('uploads', properFileName);
+    // Always normalize to forward slashes
+    newPath = newPath.replace(/\\/g, "/");
     // Rename the file
     await fs.rename(oldPath, newPath);
 
