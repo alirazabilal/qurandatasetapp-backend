@@ -390,7 +390,7 @@ app.get('/api/admin/ayats',adminAuth, async (req, res) => {
       return {
         ...ayat,
         isRecorded: !!rec,
-        audioUrl: rec ? `http://localhost:${PORT}/${rec.audioPath.replace(/\\/g, "/")}` : null,
+        audioUrl: rec ? `https://qurandatasetapp-backend-1.onrender.com/${rec.audioPath.replace(/\\/g, "/")}` : null,
         audioPath: rec ? `${rec.audioPath}` : null,
         recordedAt: rec ? rec.recordedAt : null,
         recorderName: rec? rec.recorderName: null,
