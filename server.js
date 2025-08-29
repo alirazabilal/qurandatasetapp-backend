@@ -197,6 +197,44 @@ app.get('/api/ayats/status', async (req, res) => {
 
 
 
+
+// New endpoint: Get next unrecorded ayat after a given index
+  app.get('/api/ayats/next-after/:index', async (req, res) => {
+    try {
+      const currentIndex = parseInt(req.params.index);
+      if (isNaN(currentIndex) || currentIndex < -1 || currentIndex >= ayats.length) {
+        return res.status(400).json({ error: 'Invalid current index' });
+      }
+
+      // Get all recorded indices as a Set for O(1) lookup
+      const recordedAyats = await Recording.find({}, 'ayatIndex');
+      const recordedSet = new Set(recordedAyats.map(r => r.ayatIndex));
+
+      // Find the first unrecorded ayat after currentIndex
+      let nextAyat = null;
+      for (let i = currentIndex + 1; i < ayats.length; i++) {
+        if (!recordedSet.has(i)) {
+          nextAyat = ayats[i];
+          break;
+        }
+      }
+
+      res.json({
+        ayat: nextAyat || null,
+        recordedCount: recordedSet.size,
+        totalAyats: ayats.length
+      });
+    } catch (error) {
+      console.error('Error fetching next ayat after index:', error);
+      res.status(500).json({ error: 'Failed to fetch next ayat' });
+    }
+  });
+
+
+
+
+
+
 // Save recording - UPDATED VERSION
 app.post('/api/recordings/save', upload.single('audio'), async (req, res) => {
   try {
