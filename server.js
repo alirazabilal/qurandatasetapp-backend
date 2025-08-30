@@ -435,7 +435,7 @@ loadAyatsFromCSV().then((ayatsCSV) => {
   });
 
   // Download all audios in a zip (admin only)
-  app.get('/api/download-audios', adminAuth, (req, res) => {
+  app.get('/api/download-audios', (req, res) => {
     const uploadDir = path.join(__dirname, 'Uploads');
     res.setHeader('Content-Disposition', 'attachment; filename=audios.zip');
     res.setHeader('Content-Type', 'application/zip');
