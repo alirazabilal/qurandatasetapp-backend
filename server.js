@@ -17,6 +17,26 @@ const USER_SECRET = process.env.JWT_SECRET || 'usersecretkey';
 
 require('dotenv').config();
 
+
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+
+
+// S3 / Backblaze B2 client (S3-compatible)
+const s3 = new S3Client({
+  region: process.env.B2_REGION,
+  endpoint: process.env.B2_ENDPOINT, // e.g. https://s3.us-west-002.backblazeb2.com
+  credentials: {
+    accessKeyId: process.env.B2_KEY_ID,
+    secretAccessKey: process.env.B2_APP_KEY,
+  },
+  forcePathStyle: false
+});
+const BUCKET = process.env.B2_BUCKET;
+const PRESIGN_EXPIRY = parseInt(process.env.B2_SIGN_URL_EXPIRY || '3600', 10);
+
+
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -60,30 +80,14 @@ const User = mongoose.model('User', userSchema);
 
 // Recording Schema
 const recordingSchema = new mongoose.Schema({
-  ayatIndex: {
-    type: Number,
-    required: true,
-    unique: true
-  },
-  ayatText: {
-    type: String,
-    required: true
-  },
-  audioPath: {
-    type: String,
-    required: true
-  },
-  recordedAt: {
-    type: Date,
-    default: Date.now
-  },
-  recorderName: {
-    type: String,
-    required: true
-  }
+  ayatIndex: { type: Number, required: true, unique: true },
+  ayatText: { type: String, required: true },
+  audioPath: { type: String, required: true }, // will store B2 object key
+  recordedAt: { type: Date, default: Date.now },
+  recorderName: { type: String, required: true },
 });
-
 const Recording = mongoose.model('Recording', recordingSchema);
+
 
 // Multer configuration for file upload
 const storage = multer.diskStorage({
@@ -96,12 +100,10 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
-  }
-});
+// Multer memory storage (we upload to B2 from memory, no disk)
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } }); // 15MB
+
+
 
 let ayats = [];
 
@@ -144,20 +146,6 @@ const userAuth = (req, res, next) => {
   }
 };
 
-// Admin auth middleware
-const adminAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'No token' });
-
-  const token = authHeader.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, ADMIN_SECRET);
-    if (decoded.role !== 'admin') throw new Error('Not admin');
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-};
 
 // Define routes after CSV is loaded
 loadAyatsFromCSV().then((ayatsCSV) => {
@@ -166,6 +154,8 @@ loadAyatsFromCSV().then((ayatsCSV) => {
     text
   }));
   console.log(`Total ayats loaded: ${ayats.length}`);
+
+});
 
   // User Registration
   app.post('/api/users/register', async (req, res) => {
@@ -295,58 +285,55 @@ loadAyatsFromCSV().then((ayatsCSV) => {
     }
   });
 
-  // Save recording (secured, uses user name from token)
-  app.post('/api/recordings/save', userAuth, upload.single('audio'), async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'No audio file provided' });
-      }
+  
+app.post('/api/recordings/save', userAuth,upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
 
-      const { ayatIndex, ayatText } = req.body;
-      const recorderName = req.user.name; // Get name from JWT
+    const { ayatIndex, ayatText } = req.body;
+    console.log(req.user)
+    const recorderName = req.user?.name;  // ✅ get from decoded JWT in auth middleware
 
-      if (!ayatIndex) {
-        return res.status(400).json({ error: 'Ayat index is required' });
-      }
+    if (!recorderName) return res.status(401).json({ error: 'User not logged in' });
+    if (!ayatIndex && ayatIndex !== '0') return res.status(400).json({ error: 'Ayat index is required' });
 
-      const existingRecording = await Recording.findOne({ ayatIndex: parseInt(ayatIndex) });
-      if (existingRecording) {
-        await fs.unlink(req.file.path);
-        return res.status(400).json({ error: 'This ayat is already recorded.' });
-      }
+    // Check if already recorded
+    const existing = await Recording.findOne({ ayatIndex: parseInt(ayatIndex) });
+    if (existing) return res.status(400).json({ error: 'This ayat is already recorded.' });
 
-      const properFileName = `ayat_${parseInt(ayatIndex) + 1}_${Date.now()}.webm`;
-      const oldPath = req.file.path;
-      let newPath = path.join('uploads', properFileName).replace(/\\/g, "/");
+    // create a key for object in B2
+    const ext = req.file.mimetype.includes('wav')
+      ? 'wav'
+      : req.file.mimetype.includes('mpeg')
+      ? 'mp3'
+      : 'webm';
+    const objectKey = `ayat_${parseInt(ayatIndex) + 1}_${Date.now()}.${ext}`;
 
-      await fs.rename(oldPath, newPath);
+    // upload to B2 (S3 PutObject)
+    const putParams = {
+      Bucket: BUCKET,
+      Key: objectKey,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+    };
+    await s3.send(new PutObjectCommand(putParams));
 
-      const recording = new Recording({
-        ayatIndex: parseInt(ayatIndex),
-        ayatText,
-        audioPath: newPath,
-        recorderName
-      });
+    // save DB record (store objectKey in audioPath)
+    const recording = new Recording({
+      ayatIndex: parseInt(ayatIndex),
+      ayatText,
+      audioPath: objectKey,
+      recorderName,   // ✅ saved from JWT, not from body
+    });
 
-      await recording.save();
+    await recording.save();
 
-      res.json({
-        message: 'Recording saved successfully',
-        recording
-      });
-    } catch (error) {
-      console.error('Error saving recording:', error);
-      if (req.file) {
-        try {
-          await fs.unlink(req.file.path);
-        } catch (err) {
-          console.error('Error deleting file:', err);
-        }
-      }
-      res.status(500).json({ error: 'Failed to save recording' });
-    }
-  });
-
+    res.json({ message: 'Recording saved successfully', recording });
+  } catch (err) {
+    console.error('Error saving recording:', err);
+    return res.status(500).json({ error: 'Failed to save recording' });
+  }
+});
   // Get all recordings (secured)
   app.get('/api/recordings', userAuth, async (req, res) => {
     try {
@@ -372,26 +359,7 @@ loadAyatsFromCSV().then((ayatsCSV) => {
     }
   });
 
-  // Delete recording (admin only)
-  app.delete('/api/recordings/:index', adminAuth, async (req, res) => {
-    try {
-      const recording = await Recording.findOne({ ayatIndex: parseInt(req.params.index) });
-      if (!recording) {
-        return res.status(404).json({ error: 'Recording not found' });
-      }
-      try {
-        await fs.unlink(recording.audioPath);
-      } catch (err) {
-        console.error('Error deleting file:', err);
-      }
-      await recording.deleteOne();
-      res.json({ message: 'Recording deleted successfully' });
-    } catch (error) {
-      console.error('Error deleting recording:', error);
-      res.status(500).json({ error: 'Failed to delete recording' });
-    }
-  });
-
+  
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({
@@ -401,6 +369,55 @@ loadAyatsFromCSV().then((ayatsCSV) => {
     });
   });
 
+
+
+
+
+
+
+  
+// Admin auth middleware
+const adminAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'No token' });
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, ADMIN_SECRET);
+    if (decoded.role !== 'admin') throw new Error('Not admin');
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+};
+
+
+
+
+
+
+
+  // ------------------ Delete recording (delete from B2 + DB) ------------------
+app.delete('/api/recordings/:index', adminAuth, async (req, res) => {
+  try {
+    const idx = parseInt(req.params.index);
+    const rec = await Recording.findOne({ ayatIndex: idx });
+    if (!rec) return res.status(404).json({ error: 'Recording not found' });
+
+    // delete from B2
+    await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rec.audioPath }));
+
+    // delete db
+    await rec.deleteOne();
+
+    res.json({ message: 'Recording deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+  
   // Admin login
   app.post('/api/admin/login', (req, res) => {
     const { password } = req.body;
@@ -411,41 +428,80 @@ loadAyatsFromCSV().then((ayatsCSV) => {
     return res.status(401).json({ success: false, error: 'Invalid password' });
   });
 
-  // Admin API: get all ayats with recording info
-  app.get('/api/admin/ayats', adminAuth, async (req, res) => {
-    try {
-      const recordings = await Recording.find({});
-      const recordedMap = new Map(recordings.map(r => [r.ayatIndex, r]));
-      const ayatsWithRecordings = ayats.map(ayat => {
-        const rec = recordedMap.get(ayat.index);
-        return {
-          ...ayat,
-          isRecorded: !!rec,
-          audioUrl: rec ? `https://qurandatasetapp-backend-1.onrender.com/${rec.audioPath.replace(/\\/g, "/")}` : null,
-          audioPath: rec ? `${rec.audioPath}` : null,
-          recordedAt: rec ? rec.recordedAt : null,
-          recorderName: rec ? rec.recorderName : null,
-        };
-      });
-      res.json(ayatsWithRecordings);
-    } catch (error) {
-      console.error('Error fetching admin ayats:', error);
-      res.status(500).json({ error: 'Failed to fetch ayats' });
-    }
-  });
+  // ------------------ Admin: get ayats with presigned audio URL ------------------
+// (assume you already have adminAuth middleware)
+app.get('/api/admin/ayats', adminAuth, async (req, res) => {
+  try {
+    const recordings = await Recording.find({});
+    const recordedMap = new Map(recordings.map(r => [r.ayatIndex, r]));
 
-  // Download all audios in a zip (admin only)
-  app.get('/api/download-audios', (req, res) => {
-    const uploadDir = path.join(__dirname, 'Uploads');
-    res.setHeader('Content-Disposition', 'attachment; filename=audios.zip');
+    // Build list but create presigned URLs for recorded items
+    const items = await Promise.all(ayats.map(async (ayat) => {
+      const rec = recordedMap.get(ayat.index);
+      if (!rec) {
+        return { ...ayat, isRecorded: false, audioUrl: null, audioPath: null, recordedAt: null, recorderName: null };
+      }
+      // get presigned URL for playback
+      const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+      const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
+      return {
+        ...ayat,
+        isRecorded: true,
+        audioUrl: signedUrl,
+        audioPath: rec.audioPath,
+        recordedAt: rec.recordedAt,
+        recorderName: rec.recorderName
+      };
+    }));
+
+    res.json(items);
+  } catch (err) {
+    console.error("Error fetching admin ayats:", err);
+    res.status(500).json({ error: "Failed to fetch ayats" });
+  }
+});
+
+
+  // ------------------ Download all audios as zip (stream from B2) ------------------
+app.get('/api/download-audios', async (req, res) => {
+  try {
+    const recordings = await Recording.find({});
     res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=audios.zip');
 
     const archive = archiver('zip', { zlib: { level: 9 } });
     archive.pipe(res);
-    archive.directory(uploadDir, false);
-    archive.finalize();
-  });
+
+    for (const rec of recordings) {
+  if (!rec.audioPath) continue; // skip if no key stored
+
+  try {
+    const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+    const data = await s3.send(getCmd);
+
+    // append audio file to zip (use ayat number + recorder for readability)
+    const filename = `ayat_${rec.ayatIndex + 1}_${rec.recorderName || "unknown"}.${path.extname(rec.audioPath).slice(1)}`;
+    archive.append(data.Body, { name: filename });
+
+  } catch (err) {
+    if (err.Code === "NoSuchKey") {
+      console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
+      continue; // don’t crash, just skip
+    } else {
+      console.error(`Error fetching ${rec.audioPath}:`, err);
+    }
+  }
+}
+
+
+    await archive.finalize();
+    // response will end when archive finishes
+  } catch (err) {
+    console.error('Error building zip:', err);
+    res.status(500).json({ error: 'Failed to build zip' });
+  }
 });
+
 
 // Start server
 app.listen(PORT, () => {
