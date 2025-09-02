@@ -73,18 +73,23 @@ const userSchema = new mongoose.Schema({
   password: {
     type: String,
     required: true
+  },
+  gender: {
+    type: String,
+    enum: ["Male", "Female"],
+    required: true
   }
 });
-
 const User = mongoose.model('User', userSchema);
 
 // Recording Schema
 const recordingSchema = new mongoose.Schema({
   ayatIndex: { type: Number, required: true, unique: true },
   ayatText: { type: String, required: true },
-  audioPath: { type: String, required: true }, // will store B2 object key
+  audioPath: { type: String, required: true }, 
   recordedAt: { type: Date, default: Date.now },
   recorderName: { type: String, required: true },
+  recorderGender: { type: String, enum: ["Male", "Female"], required: true } // ✅ NEW
 });
 const Recording = mongoose.model('Recording', recordingSchema);
 
@@ -158,65 +163,61 @@ loadAyatsFromCSV().then((ayatsCSV) => {
 });
 
   // User Registration
-  app.post('/api/users/register', async (req, res) => {
-    try {
-      const { name, password } = req.body;
-      console.log('Register attempt with:', { name, password: password ? '[provided]' : '[missing]' }); // Debug log
+app.post('/api/users/register', async (req, res) => {
+  try {
+    const { name, password, gender } = req.body;
 
-      if (!name || typeof name !== 'string' || name.trim() === '') {
-        return res.status(400).json({ error: 'A valid name is required' });
-      }
-      if (!password || typeof password !== 'string' || password.trim() === '') {
-        return res.status(400).json({ error: 'A valid password is required' });
-      }
-
-      const existingUser = await User.findOne({ name: name.trim() });
-      if (existingUser) {
-        return res.status(400).json({ error: 'Name already taken' });
-      }
-
-      const hashedPassword = await bcrypt.hash(password.trim(), 10);
-      const user = new User({ name: name.trim(), password: hashedPassword });
-      await user.save();
-
-      const token = jwt.sign({ name: name.trim() }, USER_SECRET, { expiresIn: '2h' });
-      res.json({ message: 'User registered successfully', token });
-    } catch (error) {
-      console.error('Error registering user:', error);
-      res.status(500).json({ error: 'Failed to register user' });
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      return res.status(400).json({ error: 'A valid name is required' });
     }
-  });
-
-  // User Login
-  app.post('/api/users/login', async (req, res) => {
-    try {
-      const { name, password } = req.body;
-      console.log('Login attempt with:', { name, password: password ? '[provided]' : '[missing]' }); // Debug log
-
-      if (!name || typeof name !== 'string' || name.trim() === '') {
-        return res.status(400).json({ error: 'Name is required' });
-      }
-      if (!password || typeof password !== 'string' || password.trim() === '') {
-        return res.status(400).json({ error: 'Password is required' });
-      }
-
-      const user = await User.findOne({ name: name.trim() });
-      if (!user) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-
-      const isMatch = await bcrypt.compare(password.trim(), user.password);
-      if (!isMatch) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-
-      const token = jwt.sign({ name: user.name }, USER_SECRET, { expiresIn: '2h' });
-      res.json({ message: 'Login successful', token });
-    } catch (error) {
-      console.error('Error logging in:', error);
-      res.status(500).json({ error: 'Failed to log in' });
+    if (!password || typeof password !== 'string' || password.trim() === '') {
+      return res.status(400).json({ error: 'A valid password is required' });
     }
-  });
+    if (!gender || !["Male", "Female"].includes(gender)) {
+      return res.status(400).json({ error: 'Gender must be Male or Female' });
+    }
+
+    const existingUser = await User.findOne({ name: name.trim() });
+    if (existingUser) {
+      return res.status(400).json({ error: 'Name already taken' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password.trim(), 10);
+    const user = new User({ name: name.trim(), password: hashedPassword, gender });
+    await user.save();
+
+    const token = jwt.sign({ name: name.trim(), gender }, USER_SECRET, { expiresIn: '2h' });
+    res.json({ message: 'User registered successfully', token, gender });
+  } catch (error) {
+    console.error('Error registering user:', error);
+    res.status(500).json({ error: 'Failed to register user' });
+  }
+});
+
+
+ // User Login
+app.post('/api/users/login', async (req, res) => {
+  try {
+    const { name, password } = req.body;
+
+    if (!name || !password) {
+      return res.status(400).json({ error: 'Name and password are required' });
+    }
+
+    const user = await User.findOne({ name: name.trim() });
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const isMatch = await bcrypt.compare(password.trim(), user.password);
+    if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const token = jwt.sign({ name: user.name, gender: user.gender }, USER_SECRET, { expiresIn: '2h' });
+    res.json({ message: 'Login successful', token, gender: user.gender });
+  } catch (error) {
+    console.error('Error logging in:', error);
+    res.status(500).json({ error: 'Failed to log in' });
+  }
+});
+
 
   // Get next unrecorded ayat (secured)
   app.get('/api/ayats/next', userAuth, async (req, res) => {
@@ -286,54 +287,47 @@ loadAyatsFromCSV().then((ayatsCSV) => {
   });
 
   
-app.post('/api/recordings/save', userAuth,upload.single('audio'), async (req, res) => {
+app.post('/api/recordings/save', userAuth, upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
 
     const { ayatIndex, ayatText } = req.body;
-    console.log(req.user)
-    const recorderName = req.user?.name;  // ✅ get from decoded JWT in auth middleware
+    const recorderName = req.user?.name;
+    const recorderGender = req.user?.gender; // ✅ from JWT
 
-    if (!recorderName) return res.status(401).json({ error: 'User not logged in' });
-    if (!ayatIndex && ayatIndex !== '0') return res.status(400).json({ error: 'Ayat index is required' });
+    if (!recorderName || !recorderGender) return res.status(401).json({ error: 'User not logged in properly' });
 
-    // Check if already recorded
     const existing = await Recording.findOne({ ayatIndex: parseInt(ayatIndex) });
     if (existing) return res.status(400).json({ error: 'This ayat is already recorded.' });
 
-    // create a key for object in B2
-    const ext = req.file.mimetype.includes('wav')
-      ? 'wav'
-      : req.file.mimetype.includes('mpeg')
-      ? 'mp3'
-      : 'webm';
+    const ext = req.file.mimetype.includes('wav') ? 'wav'
+              : req.file.mimetype.includes('mpeg') ? 'mp3'
+              : 'webm';
     const objectKey = `ayat_${parseInt(ayatIndex) + 1}_${Date.now()}.${ext}`;
 
-    // upload to B2 (S3 PutObject)
-    const putParams = {
+    await s3.send(new PutObjectCommand({
       Bucket: BUCKET,
       Key: objectKey,
       Body: req.file.buffer,
       ContentType: req.file.mimetype,
-    };
-    await s3.send(new PutObjectCommand(putParams));
+    }));
 
-    // save DB record (store objectKey in audioPath)
     const recording = new Recording({
       ayatIndex: parseInt(ayatIndex),
       ayatText,
       audioPath: objectKey,
-      recorderName,   // ✅ saved from JWT, not from body
+      recorderName,
+      recorderGender
     });
 
     await recording.save();
-
     res.json({ message: 'Recording saved successfully', recording });
   } catch (err) {
     console.error('Error saving recording:', err);
-    return res.status(500).json({ error: 'Failed to save recording' });
+    res.status(500).json({ error: 'Failed to save recording' });
   }
 });
+
   // Get all recordings (secured)
   app.get('/api/recordings', userAuth, async (req, res) => {
     try {
@@ -435,13 +429,11 @@ app.get('/api/admin/ayats', adminAuth, async (req, res) => {
     const recordings = await Recording.find({});
     const recordedMap = new Map(recordings.map(r => [r.ayatIndex, r]));
 
-    // Build list but create presigned URLs for recorded items
     const items = await Promise.all(ayats.map(async (ayat) => {
       const rec = recordedMap.get(ayat.index);
       if (!rec) {
-        return { ...ayat, isRecorded: false, audioUrl: null, audioPath: null, recordedAt: null, recorderName: null };
+        return { ...ayat, isRecorded: false, audioUrl: null, recorderName: null, recorderGender: null };
       }
-      // get presigned URL for playback
       const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
       const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
       return {
@@ -450,7 +442,8 @@ app.get('/api/admin/ayats', adminAuth, async (req, res) => {
         audioUrl: signedUrl,
         audioPath: rec.audioPath,
         recordedAt: rec.recordedAt,
-        recorderName: rec.recorderName
+        recorderName: rec.recorderName,
+        recorderGender: rec.recorderGender   // ✅ new field
       };
     }));
 
@@ -460,6 +453,7 @@ app.get('/api/admin/ayats', adminAuth, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch ayats" });
   }
 });
+
 
 
   // ------------------ Download all audios as zip (stream from B2) ------------------
