@@ -456,7 +456,7 @@ app.get('/api/admin/ayats', adminAuth, async (req, res) => {
 
 
 
-  // ------------------ Download all audios as zip (stream from B2) ------------------
+// ------------------ Download all audios as zip (stream from B2) ------------------
 app.get('/api/download-audios', async (req, res) => {
   try {
     const recordings = await Recording.find({});
@@ -467,35 +467,31 @@ app.get('/api/download-audios', async (req, res) => {
     archive.pipe(res);
 
     for (const rec of recordings) {
-  if (!rec.audioPath) continue; // skip if no key stored
+      if (!rec.audioPath) continue; // skip if no key stored
 
-  try {
-    const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
-    const data = await s3.send(getCmd);
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        const data = await s3.send(getCmd);
 
-    // append audio file to zip (use ayat number + recorder for readability)
-    const filename = `ayat_${rec.ayatIndex + 1}_${rec.recorderName || "unknown"}.${path.extname(rec.audioPath).slice(1)}`;
-    archive.append(data.Body, { name: filename });
+        // ✅ use exact filename from DB/storage
+        archive.append(data.Body, { name: rec.audioPath });
 
-  } catch (err) {
-    if (err.Code === "NoSuchKey") {
-      console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
-      continue; // don’t crash, just skip
-    } else {
-      console.error(`Error fetching ${rec.audioPath}:`, err);
+      } catch (err) {
+        if (err.Code === "NoSuchKey") {
+          console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
+          continue; // don’t crash, just skip
+        } else {
+          console.error(`Error fetching ${rec.audioPath}:`, err);
+        }
+      }
     }
-  }
-}
-
 
     await archive.finalize();
-    // response will end when archive finishes
   } catch (err) {
     console.error('Error building zip:', err);
     res.status(500).json({ error: 'Failed to build zip' });
   }
 });
-
 
 // Start server
 app.listen(PORT, () => {
