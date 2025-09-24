@@ -1,0 +1,686 @@
+[
+  {
+    "surah": 1,
+    "name": "Al-Fatiha",
+    "startIndex": 0,
+    "endIndex": 6
+  },
+  {
+    "surah": 2,
+    "name": "Al-Baqarah",
+    "startIndex": 7,
+    "endIndex": 292
+  },
+  {
+    "surah": 3,
+    "name": "Aal-E-Imran",
+    "startIndex": 293,
+    "endIndex": 492
+  },
+  {
+    "surah": 4,
+    "name": "An-Nisa",
+    "startIndex": 493,
+    "endIndex": 668
+  },
+  {
+    "surah": 5,
+    "name": "Al-Maidah",
+    "startIndex": 669,
+    "endIndex": 788
+  },
+  {
+    "surah": 6,
+    "name": "Al-Anam",
+    "startIndex": 789,
+    "endIndex": 953
+  },
+  {
+    "surah": 7,
+    "name": "Al-Araf",
+    "startIndex": 954,
+    "endIndex": 1159
+  },
+  {
+    "surah": 8,
+    "name": "Al-Anfal",
+    "startIndex": 1160,
+    "endIndex": 1234
+  },
+  {
+    "surah": 9,
+    "name": "At-Tawbah",
+    "startIndex": 1235,
+    "endIndex": 1363
+  },
+  {
+    "surah": 10,
+    "name": "Yunus",
+    "startIndex": 1364,
+    "endIndex": 1472
+  },
+  {
+    "surah": 11,
+    "name": "Hud",
+    "startIndex": 1473,
+    "endIndex": 1595
+  },
+  {
+    "surah": 12,
+    "name": "Yusuf",
+    "startIndex": 1596,
+    "endIndex": 1706
+  },
+  {
+    "surah": 13,
+    "name": "Ar-Rad",
+    "startIndex": 1707,
+    "endIndex": 1749
+  },
+  {
+    "surah": 14,
+    "name": "Ibrahim",
+    "startIndex": 1750,
+    "endIndex": 1801
+  },
+  {
+    "surah": 15,
+    "name": "Al-Hijr",
+    "startIndex": 1802,
+    "endIndex": 1900
+  },
+  {
+    "surah": 16,
+    "name": "An-Nahl",
+    "startIndex": 1901,
+    "endIndex": 2028
+  },
+  {
+    "surah": 17,
+    "name": "Al-Isra",
+    "startIndex": 2029,
+    "endIndex": 2139
+  },
+  {
+    "surah": 18,
+    "name": "Al-Kahf",
+    "startIndex": 2140,
+    "endIndex": 2249
+  },
+  {
+    "surah": 19,
+    "name": "Maryam",
+    "startIndex": 2250,
+    "endIndex": 2347
+  },
+  {
+    "surah": 20,
+    "name": "Ta-Ha",
+    "startIndex": 2348,
+    "endIndex": 2482
+  },
+  {
+    "surah": 21,
+    "name": "Al-Anbiya",
+    "startIndex": 2483,
+    "endIndex": 2594
+  },
+  {
+    "surah": 22,
+    "name": "Al-Hajj",
+    "startIndex": 2595,
+    "endIndex": 2672
+  },
+  {
+    "surah": 23,
+    "name": "Al-Muminun",
+    "startIndex": 2673,
+    "endIndex": 2790
+  },
+  {
+    "surah": 24,
+    "name": "An-Nur",
+    "startIndex": 2791,
+    "endIndex": 2854
+  },
+  {
+    "surah": 25,
+    "name": "Al-Furqan",
+    "startIndex": 2855,
+    "endIndex": 2931
+  },
+  {
+    "surah": 26,
+    "name": "Ash-Shuara",
+    "startIndex": 2932,
+    "endIndex": 3158
+  },
+  {
+    "surah": 27,
+    "name": "An-Naml",
+    "startIndex": 3159,
+    "endIndex": 3251
+  },
+  {
+    "surah": 28,
+    "name": "Al-Qasas",
+    "startIndex": 3252,
+    "endIndex": 3339
+  },
+  {
+    "surah": 29,
+    "name": "Al-Ankabut",
+    "startIndex": 3340,
+    "endIndex": 3408
+  },
+  {
+    "surah": 30,
+    "name": "Ar-Rum",
+    "startIndex": 3409,
+    "endIndex": 3468
+  },
+  {
+    "surah": 31,
+    "name": "Luqman",
+    "startIndex": 3469,
+    "endIndex": 3502
+  },
+  {
+    "surah": 32,
+    "name": "As-Sajda",
+    "startIndex": 3503,
+    "endIndex": 3532
+  },
+  {
+    "surah": 33,
+    "name": "Al-Ahzab",
+    "startIndex": 3533,
+    "endIndex": 3605
+  },
+  {
+    "surah": 34,
+    "name": "Saba",
+    "startIndex": 3606,
+    "endIndex": 3659
+  },
+  {
+    "surah": 35,
+    "name": "Fatir",
+    "startIndex": 3660,
+    "endIndex": 3704
+  },
+  {
+    "surah": 36,
+    "name": "Ya-Sin",
+    "startIndex": 3705,
+    "endIndex": 3787
+  },
+  {
+    "surah": 37,
+    "name": "As-Saffat",
+    "startIndex": 3788,
+    "endIndex": 3969
+  },
+  {
+    "surah": 38,
+    "name": "Sad",
+    "startIndex": 3970,
+    "endIndex": 4057
+  },
+  {
+    "surah": 39,
+    "name": "Az-Zumar",
+    "startIndex": 4058,
+    "endIndex": 4132
+  },
+  {
+    "surah": 40,
+    "name": "Ghafir",
+    "startIndex": 4133,
+    "endIndex": 4217
+  },
+  {
+    "surah": 41,
+    "name": "Fussilat",
+    "startIndex": 4218,
+    "endIndex": 4271
+  },
+  {
+    "surah": 42,
+    "name": "Ash-Shura",
+    "startIndex": 4272,
+    "endIndex": 4324
+  },
+  {
+    "surah": 43,
+    "name": "Az-Zukhruf",
+    "startIndex": 4325,
+    "endIndex": 4413
+  },
+  {
+    "surah": 44,
+    "name": "Ad-Dukhan",
+    "startIndex": 4414,
+    "endIndex": 4472
+  },
+  {
+    "surah": 45,
+    "name": "Al-Jathiya",
+    "startIndex": 4473,
+    "endIndex": 4509
+  },
+  {
+    "surah": 46,
+    "name": "Al-Ahqaf",
+    "startIndex": 4510,
+    "endIndex": 4544
+  },
+  {
+    "surah": 47,
+    "name": "Muhammad",
+    "startIndex": 4545,
+    "endIndex": 4582
+  },
+  {
+    "surah": 48,
+    "name": "Al-Fath",
+    "startIndex": 4583,
+    "endIndex": 4611
+  },
+  {
+    "surah": 49,
+    "name": "Al-Hujraat",
+    "startIndex": 4612,
+    "endIndex": 4629
+  },
+  {
+    "surah": 50,
+    "name": "Qaf",
+    "startIndex": 4630,
+    "endIndex": 4674
+  },
+  {
+    "surah": 51,
+    "name": "Adh-Dhariyat",
+    "startIndex": 4675,
+    "endIndex": 4734
+  },
+  {
+    "surah": 52,
+    "name": "At-Tur",
+    "startIndex": 4735,
+    "endIndex": 4783
+  },
+  {
+    "surah": 53,
+    "name": "An-Najm",
+    "startIndex": 4784,
+    "endIndex": 4845
+  },
+  {
+    "surah": 54,
+    "name": "Al-Qamar",
+    "startIndex": 4846,
+    "endIndex": 4900
+  },
+  {
+    "surah": 55,
+    "name": "Ar-Rahman",
+    "startIndex": 4901,
+    "endIndex": 4978
+  },
+  {
+    "surah": 56,
+    "name": "Al-Waqia",
+    "startIndex": 4979,
+    "endIndex": 5074
+  },
+  {
+    "surah": 57,
+    "name": "Al-Hadid",
+    "startIndex": 5075,
+    "endIndex": 5103
+  },
+  {
+    "surah": 58,
+    "name": "Al-Mujadila",
+    "startIndex": 5104,
+    "endIndex": 5125
+  },
+  {
+    "surah": 59,
+    "name": "Al-Hashr",
+    "startIndex": 5126,
+    "endIndex": 5149
+  },
+  {
+    "surah": 60,
+    "name": "Al-Mumtahina",
+    "startIndex": 5150,
+    "endIndex": 5162
+  },
+  {
+    "surah": 61,
+    "name": "As-Saff",
+    "startIndex": 5163,
+    "endIndex": 5176
+  },
+  {
+    "surah": 62,
+    "name": "Al-Jumua",
+    "startIndex": 5177,
+    "endIndex": 5187
+  },
+  {
+    "surah": 63,
+    "name": "Al-Munafiqoon",
+    "startIndex": 5188,
+    "endIndex": 5198
+  },
+  {
+    "surah": 64,
+    "name": "At-Taghabun",
+    "startIndex": 5199,
+    "endIndex": 5216
+  },
+  {
+    "surah": 65,
+    "name": "At-Talaq",
+    "startIndex": 5217,
+    "endIndex": 5228
+  },
+  {
+    "surah": 66,
+    "name": "At-Tahrim",
+    "startIndex": 5229,
+    "endIndex": 5240
+  },
+  {
+    "surah": 67,
+    "name": "Al-Mulk",
+    "startIndex": 5241,
+    "endIndex": 5270
+  },
+  {
+    "surah": 68,
+    "name": "Al-Qalam",
+    "startIndex": 5271,
+    "endIndex": 5322
+  },
+  {
+    "surah": 69,
+    "name": "Al-Haaqqa",
+    "startIndex": 5323,
+    "endIndex": 5374
+  },
+  {
+    "surah": 70,
+    "name": "Al-Maarij",
+    "startIndex": 5375,
+    "endIndex": 5418
+  },
+  {
+    "surah": 71,
+    "name": "Nuh",
+    "startIndex": 5419,
+    "endIndex": 5446
+  },
+  {
+    "surah": 72,
+    "name": "Al-Jinn",
+    "startIndex": 5447,
+    "endIndex": 5474
+  },
+  {
+    "surah": 73,
+    "name": "Al-Muzzammil",
+    "startIndex": 5475,
+    "endIndex": 5494
+  },
+  {
+    "surah": 74,
+    "name": "Al-Muddathir",
+    "startIndex": 5495,
+    "endIndex": 5550
+  },
+  {
+    "surah": 75,
+    "name": "Al-Qiyama",
+    "startIndex": 5551,
+    "endIndex": 5590
+  },
+  {
+    "surah": 76,
+    "name": "Al-Insan",
+    "startIndex": 5591,
+    "endIndex": 5621
+  },
+  {
+    "surah": 77,
+    "name": "Al-Mursalat",
+    "startIndex": 5622,
+    "endIndex": 5671
+  },
+  {
+    "surah": 78,
+    "name": "An-Naba",
+    "startIndex": 5672,
+    "endIndex": 5711
+  },
+  {
+    "surah": 79,
+    "name": "An-Naziat",
+    "startIndex": 5712,
+    "endIndex": 5757
+  },
+  {
+    "surah": 80,
+    "name": "Abasa",
+    "startIndex": 5758,
+    "endIndex": 5799
+  },
+  {
+    "surah": 81,
+    "name": "At-Takwir",
+    "startIndex": 5800,
+    "endIndex": 5828
+  },
+  {
+    "surah": 82,
+    "name": "Al-Infitar",
+    "startIndex": 5829,
+    "endIndex": 5847
+  },
+  {
+    "surah": 83,
+    "name": "Al-Mutaffifin",
+    "startIndex": 5848,
+    "endIndex": 5883
+  },
+  {
+    "surah": 84,
+    "name": "Al-Inshiqaq",
+    "startIndex": 5884,
+    "endIndex": 5908
+  },
+  {
+    "surah": 85,
+    "name": "Al-Burooj",
+    "startIndex": 5909,
+    "endIndex": 5930
+  },
+  {
+    "surah": 86,
+    "name": "At-Tariq",
+    "startIndex": 5931,
+    "endIndex": 5947
+  },
+  {
+    "surah": 87,
+    "name": "Al-Ala",
+    "startIndex": 5948,
+    "endIndex": 5966
+  },
+  {
+    "surah": 88,
+    "name": "Al-Ghashiya",
+    "startIndex": 5967,
+    "endIndex": 5992
+  },
+  {
+    "surah": 89,
+    "name": "Al-Fajr",
+    "startIndex": 5993,
+    "endIndex": 6022
+  },
+  {
+    "surah": 90,
+    "name": "Al-Balad",
+    "startIndex": 6023,
+    "endIndex": 6042
+  },
+  {
+    "surah": 91,
+    "name": "Ash-Shams",
+    "startIndex": 6043,
+    "endIndex": 6057
+  },
+  {
+    "surah": 92,
+    "name": "Al-Lail",
+    "startIndex": 6058,
+    "endIndex": 6078
+  },
+  {
+    "surah": 93,
+    "name": "Ad-Duhaa",
+    "startIndex": 6079,
+    "endIndex": 6089
+  },
+  {
+    "surah": 94,
+    "name": "Ash-Sharh",
+    "startIndex": 6090,
+    "endIndex": 6097
+  },
+  {
+    "surah": 95,
+    "name": "At-Tin",
+    "startIndex": 6098,
+    "endIndex": 6105
+  },
+  {
+    "surah": 96,
+    "name": "Al-Alaq",
+    "startIndex": 6106,
+    "endIndex": 6124
+  },
+  {
+    "surah": 97,
+    "name": "Al-Qadr",
+    "startIndex": 6125,
+    "endIndex": 6129
+  },
+  {
+    "surah": 98,
+    "name": "Al-Bayyina",
+    "startIndex": 6130,
+    "endIndex": 6137
+  },
+  {
+    "surah": 99,
+    "name": "Az-Zalzala",
+    "startIndex": 6138,
+    "endIndex": 6145
+  },
+  {
+    "surah": 100,
+    "name": "Al-Adiyat",
+    "startIndex": 6146,
+    "endIndex": 6156
+  },
+  {
+    "surah": 101,
+    "name": "Al-Qaria",
+    "startIndex": 6157,
+    "endIndex": 6167
+  },
+  {
+    "surah": 102,
+    "name": "At-Takathur",
+    "startIndex": 6168,
+    "endIndex": 6175
+  },
+  {
+    "surah": 103,
+    "name": "Al-Asr",
+    "startIndex": 6176,
+    "endIndex": 6178
+  },
+  {
+    "surah": 104,
+    "name": "Al-Humaza",
+    "startIndex": 6179,
+    "endIndex": 6187
+  },
+  {
+    "surah": 105,
+    "name": "Al-Fil",
+    "startIndex": 6188,
+    "endIndex": 6192
+  },
+  {
+    "surah": 106,
+    "name": "Quraish",
+    "startIndex": 6193,
+    "endIndex": 6196
+  },
+  {
+    "surah": 107,
+    "name": "Al-Maun",
+    "startIndex": 6197,
+    "endIndex": 6203
+  },
+  {
+    "surah": 108,
+    "name": "Al-Kawthar",
+    "startIndex": 6204,
+    "endIndex": 6206
+  },
+  {
+    "surah": 109,
+    "name": "Al-Kafiroon",
+    "startIndex": 6207,
+    "endIndex": 6212
+  },
+  {
+    "surah": 110,
+    "name": "An-Nasr",
+    "startIndex": 6213,
+    "endIndex": 6215
+  },
+  {
+    "surah": 111,
+    "name": "Al-Masad",
+    "startIndex": 6216,
+    "endIndex": 6220
+  },
+  {
+    "surah": 112,
+    "name": "Al-Ikhlas",
+    "startIndex": 6221,
+    "endIndex": 6224
+  },
+  {
+    "surah": 113,
+    "name": "Al-Falaq",
+    "startIndex": 6225,
+    "endIndex": 6229
+  },
+  {
+    "surah": 114,
+    "name": "An-Nas",
+    "startIndex": 6230,
+    "endIndex": 6235
+  }
+]
