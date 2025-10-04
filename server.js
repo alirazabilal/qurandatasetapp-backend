@@ -89,11 +89,13 @@ const upload = multer({
 let ayats = []; // ✅ NEW: Will store complete ayat data with surah info
 
 // ✅ NEW: Load ayats from Excel file
+// Replace the loadAyatsFromExcel function in your server.js (around line 66-125)
+
 const loadAyatsFromExcel = async () => {
   try {
     console.log('🔍 Looking for Excel file...');
     const filePath = path.join(__dirname, 'data', 'Kaggle - The Quran Dataset.xlsx');
-    // Check if file exists
+    
     if (!fsSync.existsSync(filePath)) {
       throw new Error(`Excel file not found at: ${filePath}`);
     }
@@ -108,47 +110,61 @@ const loadAyatsFromExcel = async () => {
 
     console.log(`📊 Loaded ${jsonData.length} rows from Excel`);
 
-    // Debug: Show first row to see column structure
+    // Debug: Show first row to see ALL column names
     if (jsonData.length > 0) {
-      console.log('🔎 First row columns:', Object.keys(jsonData[0]));
-      console.log('🔎 First row data:', jsonData[0]);
+      console.log('🔎 ALL Column names in Excel:', Object.keys(jsonData[0]));
+      console.log('🔎 First row sample data:', JSON.stringify(jsonData[0], null, 2));
     }
 
-    // Map the data to our format using exact column names
+    // Map the data - trying multiple possible column name variations
     const formattedAyats = jsonData.map((row, index) => {
       const ayat = {
-        index: index, // 0-based index
-        text: row.uthmani_script || '', // default text shown (Uthmani)
-        uthmani_script: row.uthmani_script || '',
-        indopak_script: row.indopak_script || '',
-        surahNameAr: row.surah_name_ar || '',
-        surahNameEn: row.surah_name_en || '',
-        surahNo: row.surah_no || 0,
-        ayahNoInSurah: row.ayah_no_surah || 0,
-        ayahNoQuran: row.ayah_no_quran || 0,
-        juzNo: row.juz_no || 0,
-        rukoNo: row.ruko_no || 0
+        index: index,
+        text: row.uthmani_script || row['uthmani_script'] || row.text || '',
+        uthmani_script: row.uthmani_script || row['uthmani_script'] || '',
+        indopak_script: row.indopak_script || row['indopak_script'] || '',
+        
+        // Try multiple column name variations
+        surahNameAr: row.surah_name_ar || row['surah_name_ar'] || row['Surah Name (Arabic)'] || row['surah name ar'] || '',
+        surahNameEn: row.surah_name_en || row['surah_name_en'] || row['Surah Name (English)'] || row['surah name en'] || '',
+        surahNo: row.surah_no || row['surah_no'] || row['Surah Number'] || row['surah no'] || 0,
+        ayahNoInSurah: row.ayah_no_surah || row['ayah_no_surah'] || row['Ayah Number in Surah'] || row['ayah no surah'] || 0,
+        ayahNoQuran: row.ayah_no_quran || row['ayah_no_quran'] || row['Ayah Number'] || row['ayah no quran'] || 0,
+        juzNo: row.juz_no || row['juz_no'] || row['Juz Number'] || row['juz no'] || 0,
+        rukoNo: row.ruko_no || row['ruko_no'] || row['Ruko Number'] || row['ruko no'] || 0
       };
 
-      // Debug: Log first few to verify both scripts
+      // Debug: Log first 3 rows with ALL fields
       if (index < 3) {
-        console.log(`🔎 Ayat ${index}:`, {
-          uthmani: ayat.uthmani_script?.slice(0, 30),
-          indopak: ayat.indopak_script?.slice(0, 30)
-        });
+        console.log(`\n🔎 Ayat ${index} COMPLETE DATA:`);
+        console.log(`   Surah En: "${ayat.surahNameEn}"`);
+        console.log(`   Surah Ar: "${ayat.surahNameAr}"`);
+        console.log(`   Surah No: ${ayat.surahNo}`);
+        console.log(`   Ayah in Surah: ${ayat.ayahNoInSurah}`);
+        console.log(`   Ayah in Quran: ${ayat.ayahNoQuran}`);
+        console.log(`   Juz: ${ayat.juzNo}`);
+        console.log(`   Uthmani: "${ayat.uthmani_script?.slice(0, 30)}"`);
+        console.log(`   Indopak: "${ayat.indopak_script?.slice(0, 30)}"`);
       }
 
       return ayat;
     });
 
-
     console.log(`✅ Successfully formatted ${formattedAyats.length} ayats`);
+    
+    // Final check - count how many have valid metadata
+    const validMetadata = formattedAyats.filter(a => a.surahNameEn && a.surahNo > 0).length;
+    console.log(`✅ Ayats with valid metadata: ${validMetadata}/${formattedAyats.length}`);
+    
+    if (validMetadata === 0) {
+      console.error('❌ WARNING: NO ayats have valid metadata! Column names might be wrong.');
+      console.error('📋 Please check the Excel column names match the code.');
+    }
+    
     return formattedAyats;
   } catch (error) {
     console.error('❌ Error loading Excel file:', error);
-    console.error('📁 Make sure "Kaggle - The Quran Dataset.xlsx" is in the server root directory');
-
-    // Fallback: Return empty array to prevent crashes
+    console.error('📁 Make sure "Kaggle - The Quran Dataset.xlsx" is in the data/ directory');
     return [];
   }
 };
@@ -250,6 +266,8 @@ app.post('/api/users/login', async (req, res) => {
   }
 });
 
+// Replace these two endpoints in your server.js (around line 175-250)
+
 // Get next unrecorded ayat (secured)
 app.get('/api/ayats/next', userAuth, async (req, res) => {
   try {
@@ -267,23 +285,30 @@ app.get('/api/ayats/next', userAuth, async (req, res) => {
       });
     }
 
-    // ✅ Ensure both scripts are included in the response
-    const formattedAyat = {
-      ...nextAyat,
+    // Create a complete ayat object with ALL fields
+    const completeAyat = {
+      index: nextAyat.index,
+      text: nextAyat.text || nextAyat.uthmani_script || '',
       uthmani_script: nextAyat.uthmani_script || '',
       indopak_script: nextAyat.indopak_script || '',
-      text: nextAyat.uthmani_script || nextAyat.text || ''
+      surahNameAr: nextAyat.surahNameAr || '',
+      surahNameEn: nextAyat.surahNameEn || '',
+      surahNo: nextAyat.surahNo || 0,
+      ayahNoInSurah: nextAyat.ayahNoInSurah || 0,
+      ayahNoQuran: nextAyat.ayahNoQuran || 0,
+      juzNo: nextAyat.juzNo || 0,
+      rukoNo: nextAyat.rukoNo || 0
     };
 
-    console.log('✅ Sending ayat with scripts:', {
-      uthmani_sample: formattedAyat.uthmani_script?.slice(0, 20),
-      indopak_sample: formattedAyat.indopak_script?.slice(0, 20)
+    console.log('✅ Sending complete ayat:', {
+      index: completeAyat.index,
+      surahNameEn: completeAyat.surahNameEn,
+      juzNo: completeAyat.juzNo,
+      ayahNoQuran: completeAyat.ayahNoQuran
     });
-    console.log("🧩 Sample ayat from memory:", ayats[0]);
-    console.log("🧩 Next ayat found:", nextAyat);
 
     res.json({
-      ayat: formattedAyat,
+      ayat: completeAyat,
       recordedCount: recordedIndices.length,
       totalAyats: ayats.length
     });
@@ -322,23 +347,29 @@ app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
       });
     }
 
-    // ✅ Include both scripts in response
-    const formattedAyat = {
-      ...nextAyat,
+    // Create a complete ayat object with ALL fields
+    const completeAyat = {
+      index: nextAyat.index,
+      text: nextAyat.text || nextAyat.uthmani_script || '',
       uthmani_script: nextAyat.uthmani_script || '',
       indopak_script: nextAyat.indopak_script || '',
-      text: nextAyat.uthmani_script || nextAyat.text || ''
+      surahNameAr: nextAyat.surahNameAr || '',
+      surahNameEn: nextAyat.surahNameEn || '',
+      surahNo: nextAyat.surahNo || 0,
+      ayahNoInSurah: nextAyat.ayahNoInSurah || 0,
+      ayahNoQuran: nextAyat.ayahNoQuran || 0,
+      juzNo: nextAyat.juzNo || 0,
+      rukoNo: nextAyat.rukoNo || 0
     };
 
-    console.log('✅ Sending next-after ayat with scripts:', {
-      uthmani_sample: formattedAyat.uthmani_script?.slice(0, 20),
-      indopak_sample: formattedAyat.indopak_script?.slice(0, 20)
+    console.log('✅ Sending complete ayat (next-after):', {
+      index: completeAyat.index,
+      surahNameEn: completeAyat.surahNameEn,
+      juzNo: completeAyat.juzNo
     });
-    console.log("🧩 Sample ayat from memory:", ayats[0]);
-    console.log("🧩 Next ayat found:", nextAyat);
 
     res.json({
-      ayat: formattedAyat,
+      ayat: completeAyat,
       recordedCount: recordedSet.size,
       totalAyats: ayats.length
     });
