@@ -328,6 +328,8 @@ app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
       uthmani_sample: formattedAyat.uthmani_script?.slice(0, 20),
       indopak_sample: formattedAyat.indopak_script?.slice(0, 20)
     });
+    console.log("🧩 Sample ayat from memory:", ayats[0]);
+    console.log("🧩 Next ayat found:", nextAyat);
 
     res.json({
       ayat: formattedAyat,
