@@ -55,8 +55,8 @@ mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => console.error('MongoDB connection error:', err));
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
 // User Schema
 const userSchema = new mongoose.Schema({
@@ -92,33 +92,36 @@ let ayats = []; // ✅ NEW: Will store complete ayat data with surah info
 const loadAyatsFromExcel = async () => {
   try {
     console.log('🔍 Looking for Excel file...');
-    const filePath = path.join(__dirname, 'data', 'Kaggle - The Quran Dataset.xlsx');    
+    const filePath = path.join(__dirname, 'data', 'Kaggle - The Quran Dataset.xlsx');
     // Check if file exists
     if (!fsSync.existsSync(filePath)) {
       throw new Error(`Excel file not found at: ${filePath}`);
     }
-    
+
     console.log('📁 Excel file found, reading...');
     const workbook = XLSX.readFile(filePath);
     const sheetName = workbook.SheetNames[0];
     console.log('📋 Sheet name:', sheetName);
-    
+
     const worksheet = workbook.Sheets[sheetName];
     const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
     console.log(`📊 Loaded ${jsonData.length} rows from Excel`);
-    
+
     // Debug: Show first row to see column structure
     if (jsonData.length > 0) {
       console.log('🔎 First row columns:', Object.keys(jsonData[0]));
       console.log('🔎 First row data:', jsonData[0]);
     }
-    
+
     // Map the data to our format using exact column names
     const formattedAyats = jsonData.map((row, index) => {
       const ayat = {
         index: index, // 0-based index for our system
-        text: row.ayah_ar || row['ayah_ar'] || '', // Try both ways to access
+        text: row.uthmani_script || row['uthmani_script'] || '', // Default to Uthmani by default
+        uthmani_script: row.uthmani_script || row['uthmani_script'] || '',
+        indopak_script: row.indopak_script || row['indopak_script'] || '',
+
         surahNameAr: row.surah_name_ar || row['surah_name_ar'] || '',
         surahNameEn: row.surah_name_en || row['surah_name_en'] || '',
         surahNo: row.surah_no || row['surah_no'] || 0,
@@ -127,12 +130,12 @@ const loadAyatsFromExcel = async () => {
         juzNo: row.juz_no || row['juz_no'] || 0,
         rukoNo: row.ruko_no || row['ruko_no'] || 0
       };
-      
+
       // Debug: Log first few ayats
       if (index < 3) {
         console.log(`🔎 Ayat ${index}:`, ayat);
       }
-      
+
       return ayat;
     });
 
@@ -141,7 +144,7 @@ const loadAyatsFromExcel = async () => {
   } catch (error) {
     console.error('❌ Error loading Excel file:', error);
     console.error('📁 Make sure "Kaggle - The Quran Dataset.xlsx" is in the server root directory');
-    
+
     // Fallback: Return empty array to prevent crashes
     return [];
   }
@@ -244,25 +247,37 @@ app.post('/api/users/login', async (req, res) => {
   }
 });
 
-// Get next unrecorded ayat (secured)
 app.get('/api/ayats/next', userAuth, async (req, res) => {
   try {
     console.log('🔍 API /api/ayats/next called');
-    
+
     const recordedAyats = await Recording.find({}, 'ayatIndex');
     const recordedIndices = recordedAyats.map(r => r.ayatIndex);
     const nextAyat = ayats.find(ayat => !recordedIndices.includes(ayat.index));
 
-    console.log('🔎 Found next ayat:', nextAyat ? {
-      index: nextAyat.index,
-      hasText: !!nextAyat.text,
-      hasSurahNameAr: !!nextAyat.surahNameAr,
-      hasJuzNo: !!nextAyat.juzNo,
-      hasAyahNoInSurah: !!nextAyat.ayahNoInSurah
-    } : 'No unrecorded ayat found');
+    if (!nextAyat) {
+      return res.json({
+        ayat: null,
+        recordedCount: recordedIndices.length,
+        totalAyats: ayats.length
+      });
+    }
+
+    // ✅ Ensure both scripts are included in the response
+    const formattedAyat = {
+      ...nextAyat,
+      uthmani_script: nextAyat.uthmani_script || '',
+      indopak_script: nextAyat.indopak_script || '',
+      text: nextAyat.uthmani_script || nextAyat.text || ''
+    };
+
+    console.log('✅ Sending ayat with scripts:', {
+      uthmani_sample: formattedAyat.uthmani_script?.slice(0, 20),
+      indopak_sample: formattedAyat.indopak_script?.slice(0, 20)
+    });
 
     res.json({
-      ayat: nextAyat || null,
+      ayat: formattedAyat,
       recordedCount: recordedIndices.length,
       totalAyats: ayats.length
     });
@@ -272,13 +287,12 @@ app.get('/api/ayats/next', userAuth, async (req, res) => {
   }
 });
 
-// Get next unrecorded ayat after a given index (secured)
+
 app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
   try {
     console.log('🔍 API /api/ayats/next-after called with index:', req.params.index);
-    
+
     const currentIndex = parseInt(req.params.index);
-    
     if (isNaN(currentIndex) || currentIndex < -1 || currentIndex >= ayats.length) {
       return res.status(400).json({ error: 'Invalid current index' });
     }
@@ -294,16 +308,29 @@ app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
       }
     }
 
-    console.log('🔎 Found next ayat after index:', nextAyat ? {
-      index: nextAyat.index,
-      hasText: !!nextAyat.text,
-      hasSurahNameAr: !!nextAyat.surahNameAr,
-      hasJuzNo: !!nextAyat.juzNo,
-      hasAyahNoInSurah: !!nextAyat.ayahNoInSurah
-    } : 'No unrecorded ayat found');
+    if (!nextAyat) {
+      return res.json({
+        ayat: null,
+        recordedCount: recordedSet.size,
+        totalAyats: ayats.length
+      });
+    }
+
+    // ✅ Include both scripts in response
+    const formattedAyat = {
+      ...nextAyat,
+      uthmani_script: nextAyat.uthmani_script || '',
+      indopak_script: nextAyat.indopak_script || '',
+      text: nextAyat.uthmani_script || nextAyat.text || ''
+    };
+
+    console.log('✅ Sending next-after ayat with scripts:', {
+      uthmani_sample: formattedAyat.uthmani_script?.slice(0, 20),
+      indopak_sample: formattedAyat.indopak_script?.slice(0, 20)
+    });
 
     res.json({
-      ayat: nextAyat || null,
+      ayat: formattedAyat,
       recordedCount: recordedSet.size,
       totalAyats: ayats.length
     });
@@ -312,6 +339,7 @@ app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch next ayat' });
   }
 });
+
 
 // Get all ayats status (secured)
 app.get('/api/ayats/status', userAuth, async (req, res) => {
@@ -393,7 +421,7 @@ app.get('/api/recordings', userAuth, async (req, res) => {
 app.get('/api/recordings/:index', userAuth, async (req, res) => {
   try {
     const recording = await Recording.findOne({ ayatIndex: parseInt(req.params.index) });
-    
+
     if (!recording) {
       return res.status(404).json({ error: 'Recording not found' });
     }
@@ -410,15 +438,15 @@ app.get('/api/surah/:surahNum', userAuth, async (req, res) => {
   try {
     const surahNum = parseInt(req.params.surahNum);
     const surahAyats = ayats.filter(ayat => ayat.surahNo === surahNum);
-    
+
     if (surahAyats.length === 0) {
       return res.status(404).json({ error: "Surah not found" });
     }
 
-    res.json({ 
-      surah: surahAyats[0].surahNameEn, 
+    res.json({
+      surah: surahAyats[0].surahNameEn,
       surahAr: surahAyats[0].surahNameAr,
-      ayats: surahAyats 
+      ayats: surahAyats
     });
   } catch (error) {
     console.error('Error fetching surah ayats:', error);
@@ -431,14 +459,14 @@ app.get('/api/para/:paraNum', userAuth, async (req, res) => {
   try {
     const paraNum = parseInt(req.params.paraNum);
     const paraAyats = ayats.filter(ayat => ayat.juzNo === paraNum);
-    
+
     if (paraAyats.length === 0) {
       return res.status(404).json({ error: "Para not found" });
     }
 
-    res.json({ 
-      para: paraNum, 
-      ayats: paraAyats 
+    res.json({
+      para: paraNum,
+      ayats: paraAyats
     });
   } catch (error) {
     console.error('Error fetching para ayats:', error);
@@ -451,7 +479,7 @@ app.get('/api/surahs', userAuth, async (req, res) => {
   try {
     const surahs = [];
     const seen = new Set();
-    
+
     ayats.forEach(ayat => {
       if (!seen.has(ayat.surahNo)) {
         surahs.push({
@@ -462,7 +490,7 @@ app.get('/api/surahs', userAuth, async (req, res) => {
         seen.add(ayat.surahNo);
       }
     });
-    
+
     surahs.sort((a, b) => a.surahNo - b.surahNo);
     res.json(surahs);
   } catch (error) {
