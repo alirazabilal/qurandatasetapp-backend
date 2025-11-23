@@ -3,6 +3,8 @@ node_modules/
 
 # Environment files
 .env
+*.csv
+*.wav
 
 # Logs
 logs
@@ -15,5 +17,15 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+
 # Uploads (agar chahiye ignore karna)
 uploads/
+augmented_2x/
+augmented_lowpass/
+augmented_noise/
+augmented_reverb/
+augmented_volume/
+wavaudios/
+webaudios/
+filteredforwhisper/
+temp_aiudio/
