@@ -774,6 +774,136 @@ app.get('/api/memorization/all-progress', userAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch progress' });
   }
 });
+//===========================================================
+// Get all memorization recordings for admin with presigned URLs
+app.get('/api/admin/memorization', adminAuth, async (req, res) => {
+  try {
+    const recordings = await MemorizationRecording.find({}).sort({ recordedAt: -1 });
+
+    const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
+      const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+      const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
+
+      return {
+        _id: rec._id,
+        ayatIndex: rec.ayatIndex,
+        ayatText: rec.ayatText,
+        audioUrl: signedUrl,
+        audioPath: rec.audioPath,
+        recordedAt: rec.recordedAt,
+        recorderName: rec.recorderName,
+        recorderGender: rec.recorderGender
+      };
+    }));
+
+    res.json({ recordings: recordingsWithUrls });
+  } catch (err) {
+    console.error("Error fetching admin memorization recordings:", err);
+    res.status(500).json({ error: "Failed to fetch recordings" });
+  }
+});
+
+// Delete memorization recording (admin only)
+app.delete('/api/admin/memorization/:id', adminAuth, async (req, res) => {
+  try {
+    const recordingId = req.params.id;
+    const recording = await MemorizationRecording.findById(recordingId);
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+
+    await s3.send(new DeleteObjectCommand({ 
+      Bucket: BUCKET, 
+      Key: recording.audioPath 
+    }));
+
+    await recording.deleteOne();
+
+    res.json({ message: 'Recording deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting memorization recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+// Export memorization recordings as CSV
+app.get('/api/admin/memorization/export-csv', adminAuth, async (req, res) => {
+  try {
+    const recordings = await MemorizationRecording.find({}).sort({ ayatIndex: 1, recorderName: 1 });
+
+    let csv = 'Ayat_Index,Ayat_Number,Surah_Name,Para,Recorder_Name,Gender,Audio_Filename,Recorded_Date\n';
+
+    for (const rec of recordings) {
+      const ayat = ayats.find(a => a.index === rec.ayatIndex);
+      
+      const timestamp = new Date(rec.recordedAt).getTime();
+      const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
+      
+      const row = [
+        rec.ayatIndex,
+        rec.ayatIndex + 1,
+        ayat ? `"${ayat.surahNameEn} (${ayat.surahNameAr})"` : 'Unknown',
+        ayat ? ayat.juzNo : 30,
+        `"${rec.recorderName}"`,
+        rec.recorderGender,
+        uniqueFilename,
+        new Date(rec.recordedAt).toISOString()
+      ].join(',');
+      
+      csv += row + '\n';
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=memorization_para30_recordings.csv');
+    res.send(csv);
+  } catch (err) {
+    console.error('Error exporting memorization CSV:', err);
+    res.status(500).json({ error: 'Failed to export CSV' });
+  }
+});
+
+// Download memorization recordings with unique filenames
+app.get('/api/download-memorization-audios', async (req, res) => {
+  try {
+    const recordings = await MemorizationRecording.find({}).sort({ recorderName: 1, ayatIndex: 1 });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=memorization_para30_recordings.zip');
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+
+    for (const rec of recordings) {
+      if (!rec.audioPath) continue;
+
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        const data = await s3.send(getCmd);
+        
+        const timestamp = new Date(rec.recordedAt).getTime();
+        const folderName = `${rec.recorderName}_${rec.recorderGender}`;
+        const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
+        const filePath = `${folderName}/${uniqueFilename}`;
+        
+        archive.append(data.Body, { name: filePath });
+      } catch (err) {
+        if (err.Code === "NoSuchKey") {
+          console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
+          continue;
+        } else {
+          console.error(`Error fetching ${rec.audioPath}:`, err);
+        }
+      }
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    console.error('Error building memorization zip:', err);
+    res.status(500).json({ error: 'Failed to build zip' });
+  }
+});
+
 //======================================================================================
 
 // Admin: get ayats with presigned audio URL
