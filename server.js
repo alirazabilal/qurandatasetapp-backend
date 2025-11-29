@@ -247,6 +247,9 @@ app.post('/api/users/login', async (req, res) => {
   }
 });
 
+
+
+
 app.get('/api/ayats/next', userAuth, async (req, res) => {
   try {
     console.log('🔍 API /api/ayats/next called');
@@ -365,168 +368,7 @@ app.get('/api/ayats/status', userAuth, async (req, res) => {
   }
 });
 
-//=================================Juz 30th =====================================
-// ========================================
-// ✅ MEMORIZATION FEATURE - ADD THIS CODE
-// ========================================
 
-// Memorization Recording Schema (for 30th Para)
-const memorizationSchema = new mongoose.Schema({
-  userName: { type: String, required: true },
-  ayatIndex: { type: Number, required: true },
-  ayatText: { type: String, required: true },
-  audioPath: { type: String, required: true },
-  recordedAt: { type: Date, default: Date.now },
-  surahNo: { type: Number, required: true },
-  ayahNoInSurah: { type: Number, required: true },
-  ayahNoQuran: { type: Number, required: true }
-});
-
-memorizationSchema.index({ userName: 1, ayatIndex: 1 });
-
-const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
-
-// Get user's memorization progress (30th Para only)
-app.get('/api/memorization/progress', userAuth, async (req, res) => {
-  try {
-    const userName = req.user?.name;
-    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
-
-    const juz30Ayats = ayats.filter(ayat => ayat.juzNo === 30);
-    
-    if (juz30Ayats.length === 0) {
-      return res.status(404).json({ error: '30th Para not found' });
-    }
-
-    const userRecordings = await MemorizationRecording.find(
-      { userName },
-      'ayatIndex'
-    ).distinct('ayatIndex');
-
-    const recordedSet = new Set(userRecordings);
-    const nextAyat = juz30Ayats.find(ayat => !recordedSet.has(ayat.index));
-
-    res.json({
-      totalAyats: juz30Ayats.length,
-      recordedCount: recordedSet.size,
-      nextAyat: nextAyat || null,
-      isComplete: !nextAyat
-    });
-  } catch (error) {
-    console.error('Error fetching memorization progress:', error);
-    res.status(500).json({ error: 'Failed to fetch progress' });
-  }
-});
-
-// Save memorization recording
-app.post('/api/memorization/save', userAuth, upload.single('audio'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
-
-    const { ayatIndex, ayatText, surahNo, ayahNoInSurah, ayahNoQuran } = req.body;
-    const userName = req.user?.name;
-
-    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
-
-    const ayat = ayats.find(a => a.index === parseInt(ayatIndex));
-    if (!ayat || ayat.juzNo !== 30) {
-      return res.status(400).json({ error: 'Only 30th Para ayats allowed for memorization' });
-    }
-
-    const ext = req.file.mimetype.includes('wav') ? 'wav' : 
-                req.file.mimetype.includes('mpeg') ? 'mp3' : 'webm';
-    const timestamp = Date.now();
-    const objectKey = `memorization/${userName}/ayat_${parseInt(ayatIndex) + 1}_${timestamp}.${ext}`;
-
-    await s3.send(new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: objectKey,
-      Body: req.file.buffer,
-      ContentType: req.file.mimetype,
-    }));
-
-    const recording = new MemorizationRecording({
-      userName,
-      ayatIndex: parseInt(ayatIndex),
-      ayatText,
-      audioPath: objectKey,
-      surahNo: parseInt(surahNo),
-      ayahNoInSurah: parseInt(ayahNoInSurah),
-      ayahNoQuran: parseInt(ayahNoQuran)
-    });
-
-    await recording.save();
-
-    res.json({
-      message: 'Memorization recording saved successfully',
-      recording
-    });
-  } catch (err) {
-    console.error('Error saving memorization recording:', err);
-    res.status(500).json({ error: 'Failed to save recording' });
-  }
-});
-
-// Get all user's memorization recordings with audio URLs
-app.get('/api/memorization/recordings', userAuth, async (req, res) => {
-  try {
-    const userName = req.user?.name;
-    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
-
-    const recordings = await MemorizationRecording.find({ userName }).sort('ayatIndex recordedAt');
-
-    const recordingsWithUrls = await Promise.all(
-      recordings.map(async (rec) => {
-        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
-        const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
-
-        return {
-          _id: rec._id,
-          ayatIndex: rec.ayatIndex,
-          ayatText: rec.ayatText,
-          audioUrl: signedUrl,
-          recordedAt: rec.recordedAt,
-          surahNo: rec.surahNo,
-          ayahNoInSurah: rec.ayahNoInSurah,
-          ayahNoQuran: rec.ayahNoQuran
-        };
-      })
-    );
-
-    res.json(recordingsWithUrls);
-  } catch (error) {
-    console.error('Error fetching memorization recordings:', error);
-    res.status(500).json({ error: 'Failed to fetch recordings' });
-  }
-});
-
-// Delete a memorization recording
-app.delete('/api/memorization/recordings/:id', userAuth, async (req, res) => {
-  try {
-    const userName = req.user?.name;
-    const recordingId = req.params.id;
-
-    const recording = await MemorizationRecording.findOne({ _id: recordingId, userName });
-    
-    if (!recording) {
-      return res.status(404).json({ error: 'Recording not found or unauthorized' });
-    }
-
-    await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: recording.audioPath }));
-    await recording.deleteOne();
-
-    res.json({ message: 'Recording deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting memorization recording:', error);
-    res.status(500).json({ error: 'Failed to delete recording' });
-  }
-});
-
-
-// ========================================
-// END OF MEMORIZATION FEATURE
-// ========================================
-// =================================JUz 30th==========================================
 
 app.post('/api/recordings/save', userAuth, upload.single('audio'), async (req, res) => {
   try {
@@ -734,6 +576,205 @@ app.post('/api/admin/login', (req, res) => {
   }
   return res.status(401).json({ success: false, error: 'Invalid password' });
 });
+
+//====================================================================================
+// Add these routes to your server.js file after the existing routes
+
+// Memorization Recording Schema (add this after the Recording schema)
+const memorizationSchema = new mongoose.Schema({
+  ayatIndex: { type: Number, required: true },
+  ayatText: { type: String, required: true },
+  audioPath: { type: String, required: true },
+  recordedAt: { type: Date, default: Date.now },
+  recorderName: { type: String, required: true },
+  recorderGender: { type: String, enum: ["Male", "Female"], required: true }
+});
+
+// Create compound index to allow multiple recordings per user per ayat
+memorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
+
+const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
+
+// Get next unrecorded ayat from Para 30 for current user
+app.get('/api/memorization/next', userAuth, async (req, res) => {
+  try {
+    const userName = req.user?.name;
+    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
+
+    // Filter ayats for Para 30 (juzNo === 30)
+    const para30Ayats = ayats.filter(ayat => ayat.juzNo === 30);
+
+    if (para30Ayats.length === 0) {
+      return res.status(404).json({ error: 'Para 30 data not found' });
+    }
+
+    // Get user's recorded ayats from Para 30
+    const userRecordings = await MemorizationRecording.find(
+      { recorderName: userName },
+      'ayatIndex'
+    );
+    const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
+
+    // Find next unrecorded ayat
+    const nextAyat = para30Ayats.find(ayat => !recordedIndices.includes(ayat.index));
+
+    if (!nextAyat) {
+      return res.json({
+        ayat: null,
+        userRecorded: recordedIndices.length,
+        totalAyats: para30Ayats.length
+      });
+    }
+
+    const formattedAyat = {
+      ...nextAyat,
+      uthmani_script: nextAyat.uthmani_script || '',
+      indopak_script: nextAyat.indopak_script || '',
+      text: nextAyat.uthmani_script || nextAyat.text || ''
+    };
+
+    res.json({
+      ayat: formattedAyat,
+      userRecorded: recordedIndices.length,
+      totalAyats: para30Ayats.length
+    });
+  } catch (error) {
+    console.error('Error fetching next memorization ayat:', error);
+    res.status(500).json({ error: 'Failed to fetch next ayat' });
+  }
+});
+
+// Save memorization recording
+app.post('/api/memorization/save', userAuth, upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
+
+    const { ayatIndex, ayatText } = req.body;
+    const recorderName = req.user?.name;
+    const recorderGender = req.user?.gender;
+
+    if (!recorderName || !recorderGender) {
+      return res.status(401).json({ error: 'User not logged in properly' });
+    }
+
+    const ayatIdx = parseInt(ayatIndex);
+    
+    // Verify ayat is from Para 30
+    const ayat = ayats.find(a => a.index === ayatIdx);
+    if (!ayat || ayat.juzNo !== 30) {
+      return res.status(400).json({ error: 'Invalid ayat or not from Para 30' });
+    }
+
+    // Upload to B2/S3
+    const ext = req.file.mimetype.includes('wav') ? 'wav' 
+                : req.file.mimetype.includes('mpeg') ? 'mp3' 
+                : 'webm';
+    const objectKey = `memorization/${recorderName}_ayat_${ayatIdx + 1}_${Date.now()}.${ext}`;
+
+    await s3.send(new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: objectKey,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+    }));
+
+    // Save to database (allows multiple recordings)
+    const recording = new MemorizationRecording({
+      ayatIndex: ayatIdx,
+      ayatText,
+      audioPath: objectKey,
+      recorderName,
+      recorderGender
+    });
+
+    await recording.save();
+
+    res.json({
+      message: 'Recording saved successfully',
+      recording
+    });
+  } catch (err) {
+    console.error('Error saving memorization recording:', err);
+    res.status(500).json({ error: 'Failed to save recording' });
+  }
+});
+
+// Get user's memorization history
+app.get('/api/memorization/history', userAuth, async (req, res) => {
+  try {
+    const userName = req.user?.name;
+    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
+
+    const recordings = await MemorizationRecording.find({ recorderName: userName })
+      .sort({ recordedAt: -1 });
+
+    res.json({ recordings });
+  } catch (error) {
+    console.error('Error fetching memorization history:', error);
+    res.status(500).json({ error: 'Failed to fetch history' });
+  }
+});
+
+// Delete user's own memorization recording
+app.delete('/api/memorization/:id', userAuth, async (req, res) => {
+  try {
+    const userName = req.user?.name;
+    const recordingId = req.params.id;
+
+    const recording = await MemorizationRecording.findOne({
+      _id: recordingId,
+      recorderName: userName
+    });
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found or not owned by user' });
+    }
+
+    // Delete from B2
+    await s3.send(new DeleteObjectCommand({ 
+      Bucket: BUCKET, 
+      Key: recording.audioPath 
+    }));
+
+    // Delete from database
+    await recording.deleteOne();
+
+    res.json({ message: 'Recording deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting memorization recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+// Get all users' memorization progress (for admin or statistics)
+app.get('/api/memorization/all-progress', userAuth, async (req, res) => {
+  try {
+    const recordings = await MemorizationRecording.find({}, 'recorderName ayatIndex');
+    
+    const progressByUser = {};
+    recordings.forEach(rec => {
+      if (!progressByUser[rec.recorderName]) {
+        progressByUser[rec.recorderName] = new Set();
+      }
+      progressByUser[rec.recorderName].add(rec.ayatIndex);
+    });
+
+    const para30Count = ayats.filter(a => a.juzNo === 30).length;
+    
+    const progress = Object.entries(progressByUser).map(([name, indices]) => ({
+      name,
+      recorded: indices.size,
+      total: para30Count,
+      percentage: ((indices.size / para30Count) * 100).toFixed(1)
+    }));
+
+    res.json({ progress });
+  } catch (error) {
+    console.error('Error fetching all progress:', error);
+    res.status(500).json({ error: 'Failed to fetch progress' });
+  }
+});
+//======================================================================================
 
 // Admin: get ayats with presigned audio URL
 app.get('/api/admin/ayats', adminAuth, async (req, res) => {
