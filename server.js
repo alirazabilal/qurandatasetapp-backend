@@ -906,6 +906,67 @@ app.get('/api/download-memorization-audios', async (req, res) => {
 
 //======================================================================================
 
+// Add this route to your server.js (after memorization routes)
+
+// Get next group of unrecorded ayats from Para 30 for bulk recording
+app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
+  try {
+    const userName = req.user?.name;
+    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
+
+    const limit = parseInt(req.query.limit) || 7; // Default 7 ayats per page
+
+    // Filter ayats for Para 30 (juzNo === 30)
+    const para30Ayats = ayats.filter(ayat => ayat.juzNo === 30);
+
+    if (para30Ayats.length === 0) {
+      return res.status(404).json({ error: 'Para 30 data not found' });
+    }
+
+    // Get user's recorded ayats from Para 30
+    const userRecordings = await MemorizationRecording.find(
+      { recorderName: userName },
+      'ayatIndex'
+    );
+    const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
+
+    // Find unrecorded ayats
+    const unrecordedAyats = para30Ayats.filter(ayat => !recordedIndices.includes(ayat.index));
+
+    // Get next group (limited by the limit parameter)
+    const nextGroup = unrecordedAyats.slice(0, limit);
+
+    if (nextGroup.length === 0) {
+      return res.json({
+        ayats: [],
+        userRecorded: recordedIndices.length,
+        totalAyats: para30Ayats.length
+      });
+    }
+
+    // Format ayats with both scripts
+    const formattedAyats = nextGroup.map(ayat => ({
+      ...ayat,
+      uthmani_script: ayat.uthmani_script || '',
+      indopak_script: ayat.indopak_script || '',
+      text: ayat.uthmani_script || ayat.text || ''
+    }));
+
+    res.json({
+      ayats: formattedAyats,
+      userRecorded: recordedIndices.length,
+      totalAyats: para30Ayats.length
+    });
+  } catch (error) {
+    console.error('Error fetching bulk recording ayats:', error);
+    res.status(500).json({ error: 'Failed to fetch ayats' });
+  }
+});
+
+//==============================================================================================
+
+
+
 // Admin: get ayats with presigned audio URL
 app.get('/api/admin/ayats', adminAuth, async (req, res) => {
   try {
