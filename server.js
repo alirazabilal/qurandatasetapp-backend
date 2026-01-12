@@ -827,22 +827,53 @@ app.delete('/api/admin/memorization/:id', adminAuth, async (req, res) => {
   }
 });
 
-// Export memorization recordings as CSV
-app.get('/api/admin/memorization/export-csv', adminAuth, async (req, res) => {
+// Replace your existing CSV export route with this in server.js
+
+// Export memorization recordings as CSV (Fixed with query token support)
+app.get('/api/admin/memorization/export-csv', async (req, res) => {
   try {
+    // Get token from either header or query parameter
+    const authHeader = req.headers.authorization;
+    const queryToken = req.query.token;
+    
+    let token = null;
+    if (authHeader) {
+      token = authHeader.split(' ')[1];
+    } else if (queryToken) {
+      token = queryToken;
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
+    // Verify admin token
+    try {
+      const decoded = jwt.verify(token, ADMIN_SECRET);
+      if (decoded.role !== 'admin') {
+        return res.status(401).json({ error: 'Not admin' });
+      }
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    // Fetch all memorization recordings
     const recordings = await MemorizationRecording.find({}).sort({ ayatIndex: 1, recorderName: 1 });
 
+    // CSV Header
     let csv = 'Ayat_Index,Ayat_Number,Surah_Name,Para,Recorder_Name,Gender,Audio_Filename,Recorded_Date\n';
 
+    // Add each recording as a row
     for (const rec of recordings) {
       const ayat = ayats.find(a => a.index === rec.ayatIndex);
       
+      // Create unique filename with user name
       const timestamp = new Date(rec.recordedAt).getTime();
       const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
       
       const row = [
         rec.ayatIndex,
-        rec.ayatIndex + 1,
+        rec.ayatIndex + 1, // Ayat number (1-based)
         ayat ? `"${ayat.surahNameEn} (${ayat.surahNameAr})"` : 'Unknown',
         ayat ? ayat.juzNo : 30,
         `"${rec.recorderName}"`,
@@ -939,50 +970,52 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
       });
     }
 
-    // Strategy:
-    // 1. Surah 78 (An-Naba) to 93 (Ad-Duha) → 1 at a time (single surah)
-    // 2. Surah 94 (Ash-Sharh) to 104 (Al-Humazah) → 2 at a time (pairs)
-    // 3. Last 10 surahs (105-114) → 5 at a time (two groups of 5)
-
-    const surahGroups = [
-      // Single surahs (78-93)
-      [78], [79], [80], [81], [82], [83], [84], [85], [86], [87], 
-      [88], [89], [90], [91], [92], [93],
-      
-      // Pairs (94-104)
-      [94, 95],   // Ash-Sharh + At-Tin
-      [96, 97],   // Al-Alaq + Al-Qadr
-      [98, 99],   // Al-Bayyinah + Az-Zalzalah
-      [100, 101], // Al-Adiyat + Al-Qari'ah
-      [102, 103], // At-Takathur + Al-Asr
-      [104],      // Al-Humazah (single)
-      
-      // Last 10 surahs in groups of 5
-      [105, 106, 107, 108, 109],       // Al-Fil to Al-Kafirun
-      [110, 111, 112, 113, 114]        // An-Nasr to An-Nas
-    ];
-
-    // Find first group that has unrecorded ayats
-    let nextGroup = [];
-    let groupSurahs = [];
-
-    for (const surahNums of surahGroups) {
-      const groupAyats = unrecordedAyats.filter(ayat => surahNums.includes(ayat.surahNo));
-      
-      if (groupAyats.length > 0) {
-        nextGroup = groupAyats;
-        groupSurahs = surahNums;
-        break;
-      }
-    }
-
-    if (nextGroup.length === 0) {
+    // Get all unique surahs in Para 30 from unrecorded ayats
+    const unrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
+    
+    if (unrecordedSurahs.length === 0) {
       return res.json({
         ayats: [],
         userRecorded: recordedIndices.length,
         totalAyats: para30Ayats.length
       });
     }
+
+    let groupSurahs = [];
+    let nextGroup = [];
+
+    // Find next group based on first unrecorded surah
+    const firstSurah = unrecordedSurahs[0];
+
+    // Strategy:
+    // Surah 78-93: 1 at a time
+    // Surah 94-104: 2 at a time
+    // Surah 105-114: 5 at a time
+
+    if (firstSurah <= 93) {
+      // Single surah (78-93)
+      groupSurahs = [firstSurah];
+    } else if (firstSurah <= 104) {
+      // Pairs (94-104)
+      groupSurahs = [firstSurah];
+      if (unrecordedSurahs.includes(firstSurah + 1) && firstSurah + 1 <= 104) {
+        groupSurahs.push(firstSurah + 1);
+      }
+    } else {
+      // Groups of 5 (105-114)
+      groupSurahs = [firstSurah];
+      for (let i = 1; i < 5; i++) {
+        if (unrecordedSurahs.includes(firstSurah + i) && firstSurah + i <= 114) {
+          groupSurahs.push(firstSurah + i);
+        }
+      }
+    }
+
+    // Get all ayats for selected surahs
+    nextGroup = unrecordedAyats.filter(ayat => groupSurahs.includes(ayat.surahNo));
+
+    // Sort by ayat index
+    nextGroup.sort((a, b) => a.index - b.index);
 
     // Format ayats with both scripts
     const formattedAyats = nextGroup.map(ayat => ({
@@ -999,13 +1032,14 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
       currentSurahs: groupSurahs,
       groupType: groupSurahs.length === 1 ? 'single' : 
                  groupSurahs.length === 2 ? 'pair' : 
-                 groupSurahs.length === 5 ? 'five' : 'multiple'
+                 groupSurahs.length >= 5 ? 'five' : 'multiple'
     });
   } catch (error) {
     console.error('Error fetching bulk recording ayats:', error);
     res.status(500).json({ error: 'Failed to fetch ayats' });
   }
 });
+
 //==============================================================================================
 
 
@@ -1085,6 +1119,12 @@ app.get('/api/download-audios', async (req, res) => {
   }
 });
 
+
+//========================================
+
+
+
+//=====================================================================================
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
