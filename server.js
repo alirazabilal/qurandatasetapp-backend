@@ -827,37 +827,39 @@ app.delete('/api/admin/memorization/:id', adminAuth, async (req, res) => {
   }
 });
 
+
+// Toggle verification for memorization recording (admin only)
+app.patch('/api/admin/memorization/verify/:id', adminAuth, async (req, res) => {
+  try {
+    const recordingId = req.params.id;
+    const recording = await MemorizationRecording.findById(recordingId);
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+
+    // Toggle verification status
+    recording.isVerified = !recording.isVerified;
+    await recording.save();
+
+    res.json({ 
+      message: 'Verification updated successfully',
+      isVerified: recording.isVerified 
+    });
+  } catch (err) {
+    console.error('Error updating memorization verification:', err);
+    res.status(500).json({ error: 'Failed to update verification' });
+  }
+});
+
 // Replace your existing CSV export route with this in server.js
 
 // Export memorization recordings as CSV (Fixed with query token support)
-app.get('/api/admin/memorization/export-csv', async (req, res) => {
+// Add this route to your server.js (after other admin routes)
+
+// Export memorization recordings as CSV
+app.get('/api/admin/memorization/export-csv', adminAuth, async (req, res) => {
   try {
-    // Get token from either header or query parameter
-    const authHeader = req.headers.authorization;
-    const queryToken = req.query.token;
-    
-    let token = null;
-    if (authHeader) {
-      token = authHeader.split(' ')[1];
-    } else if (queryToken) {
-      token = queryToken;
-    }
-
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
-    }
-
-    // Verify admin token
-    try {
-      const decoded = jwt.verify(token, ADMIN_SECRET);
-      if (decoded.role !== 'admin') {
-        return res.status(401).json({ error: 'Not admin' });
-      }
-    } catch (err) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-
-    // Fetch all memorization recordings
     const recordings = await MemorizationRecording.find({}).sort({ ayatIndex: 1, recorderName: 1 });
 
     // CSV Header
@@ -894,6 +896,47 @@ app.get('/api/admin/memorization/export-csv', async (req, res) => {
   }
 });
 
+// Download memorization recordings with unique filenames (UPDATED)
+app.get('/api/download-memorization-audios', async (req, res) => {
+  try {
+    const recordings = await MemorizationRecording.find({}).sort({ recorderName: 1, ayatIndex: 1 });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=memorization_para30_recordings.zip');
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+
+    for (const rec of recordings) {
+      if (!rec.audioPath) continue;
+
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        const data = await s3.send(getCmd);
+        
+        // Create unique filename with user name
+        const timestamp = new Date(rec.recordedAt).getTime();
+        const folderName = `${rec.recorderName}_${rec.recorderGender}`;
+        const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
+        const filePath = `${folderName}/${uniqueFilename}`;
+        
+        archive.append(data.Body, { name: filePath });
+      } catch (err) {
+        if (err.Code === "NoSuchKey") {
+          console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
+          continue;
+        } else {
+          console.error(`Error fetching ${rec.audioPath}:`, err);
+        }
+      }
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    console.error('Error building memorization zip:', err);
+    res.status(500).json({ error: 'Failed to build zip' });
+  }
+});
 // Download memorization recordings with unique filenames
 app.get('/api/download-memorization-audios', async (req, res) => {
   try {
@@ -934,6 +977,7 @@ app.get('/api/download-memorization-audios', async (req, res) => {
     res.status(500).json({ error: 'Failed to build zip' });
   }
 });
+
 
 //======================================================================================
 
