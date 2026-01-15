@@ -587,7 +587,8 @@ const memorizationSchema = new mongoose.Schema({
   audioPath: { type: String, required: true },
   recordedAt: { type: Date, default: Date.now },
   recorderName: { type: String, required: true },
-  recorderGender: { type: String, enum: ["Male", "Female"], required: true }
+  recorderGender: { type: String, enum: ["Male", "Female"], required: true },
+  isVerified: { type: Boolean, default: false }
 });
 
 // Create compound index to allow multiple recordings per user per ayat
