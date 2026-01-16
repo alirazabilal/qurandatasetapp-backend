@@ -793,7 +793,8 @@ app.get('/api/admin/memorization', adminAuth, async (req, res) => {
         audioPath: rec.audioPath,
         recordedAt: rec.recordedAt,
         recorderName: rec.recorderName,
-        recorderGender: rec.recorderGender
+        recorderGender: rec.recorderGender,
+        isVerified: rec.isVerified
       };
     }));
 
