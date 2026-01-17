@@ -775,6 +775,61 @@ app.get('/api/memorization/all-progress', userAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch progress' });
   }
 });
+
+
+//==================CSV Me Ayat Text Column==================
+// Get ALL ayats without pagination (for CSV export)
+app.get('/api/admin/ayats/all', adminAuth, async (req, res) => {
+  try {
+    const recordings = await Recording.find({});
+    const recordedMap = new Map(recordings.map(r => [r.ayatIndex, r]));
+
+    const items = await Promise.all(ayats.map(async (ayat) => {
+      const rec = recordedMap.get(ayat.index);
+      if (!rec) {
+        return {
+          ...ayat,
+          isRecorded: false,
+          audioUrl: null,
+          recorderName: null,
+          recorderGender: null,
+          isVerified: false
+        };
+      }
+
+      return {
+        ...ayat,
+        isRecorded: true,
+        audioPath: rec.audioPath,
+        recordedAt: rec.recordedAt,
+        recorderName: rec.recorderName,
+        recorderGender: rec.recorderGender,
+        isVerified: rec.isVerified
+      };
+    }));
+
+    res.json({ data: items });
+  } catch (err) {
+    console.error("Error fetching all ayats:", err);
+    res.status(500).json({ error: "Failed to fetch ayats" });
+  }
+});
+
+// Get ALL memorization recordings without pagination (for CSV export)
+app.get('/api/admin/memorization/all', adminAuth, async (req, res) => {
+  try {
+    const recordings = await MemorizationRecording.find({})
+      .sort({ recordedAt: -1 });
+
+    res.json({ recordings });
+  } catch (err) {
+    console.error("Error fetching all memorization recordings:", err);
+    res.status(500).json({ error: "Failed to fetch recordings" });
+  }
+});
+//===========================================================
+
+
 //===========================================================
 // Admin: get memorization with pagination
 app.get('/api/admin/memorization', adminAuth, async (req, res) => {
