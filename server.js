@@ -34,15 +34,7 @@ const BUCKET = process.env.B2_BUCKET;
 const PRESIGN_EXPIRY = parseInt(process.env.B2_SIGN_URL_EXPIRY || '3600', 10);
 
 // Middleware
-//app.use(cors());
-app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'https://qurandatasetapp-frontend2.onrender.com'
-  ],
-  credentials: true
-}));
-
+app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
@@ -784,10 +776,18 @@ app.get('/api/memorization/all-progress', userAuth, async (req, res) => {
   }
 });
 //===========================================================
-// Get all memorization recordings for admin with presigned URLs
+// Admin: get memorization with pagination
 app.get('/api/admin/memorization', adminAuth, async (req, res) => {
   try {
-    const recordings = await MemorizationRecording.find({}).sort({ recordedAt: -1 });
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 200;
+    const skip = (page - 1) * limit;
+
+    const totalRecordings = await MemorizationRecording.countDocuments();
+    const recordings = await MemorizationRecording.find({})
+      .sort({ recordedAt: -1 })
+      .skip(skip)
+      .limit(limit);
 
     const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
       const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
@@ -806,7 +806,15 @@ app.get('/api/admin/memorization', adminAuth, async (req, res) => {
       };
     }));
 
-    res.json({ recordings: recordingsWithUrls });
+    res.json({
+      recordings: recordingsWithUrls,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalRecordings / limit),
+        totalItems: totalRecordings,
+        itemsPerPage: limit
+      }
+    });
   } catch (err) {
     console.error("Error fetching admin memorization recordings:", err);
     res.status(500).json({ error: "Failed to fetch recordings" });
@@ -1098,13 +1106,20 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
 
 
 
-// Admin: get ayats with presigned audio URL
+// Admin: get ayats with pagination
 app.get('/api/admin/ayats', adminAuth, async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 200;
+    const skip = (page - 1) * limit;
+
     const recordings = await Recording.find({});
     const recordedMap = new Map(recordings.map(r => [r.ayatIndex, r]));
 
-    const items = await Promise.all(ayats.map(async (ayat) => {
+    // Get paginated ayats
+    const paginatedAyats = ayats.slice(skip, skip + limit);
+
+    const items = await Promise.all(paginatedAyats.map(async (ayat) => {
       const rec = recordedMap.get(ayat.index);
       if (!rec) {
         return {
@@ -1131,12 +1146,21 @@ app.get('/api/admin/ayats', adminAuth, async (req, res) => {
       };
     }));
 
-    res.json(items);
+    res.json({
+      data: items,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(ayats.length / limit),
+        totalItems: ayats.length,
+        itemsPerPage: limit
+      }
+    });
   } catch (err) {
     console.error("Error fetching admin ayats:", err);
     res.status(500).json({ error: "Failed to fetch ayats" });
   }
 });
+
 
 // Download all audios as zip (stream from B2)
 app.get('/api/download-audios', async (req, res) => {
