@@ -34,7 +34,15 @@ const BUCKET = process.env.B2_BUCKET;
 const PRESIGN_EXPIRY = parseInt(process.env.B2_SIGN_URL_EXPIRY || '3600', 10);
 
 // Middleware
-app.use(cors());
+//app.use(cors());
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'https://qurandatasetapp-frontend2.onrender.com'
+  ],
+  credentials: true
+}));
+
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
