@@ -8,7 +8,7 @@ const fsSync = require('fs');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const archiver = require('archiver');
-const XLSX = require('xlsx'); // ✅ NEW: Added for Excel file reading
+const XLSX = require('xlsx');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -19,7 +19,7 @@ require('dotenv').config();
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-// S3 / Backblaze B2 client (S3-compatible)
+// S3 / Backblaze B2 client
 const s3 = new S3Client({
   region: process.env.B2_REGION,
   endpoint: process.env.B2_ENDPOINT,
@@ -38,7 +38,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
-// Create uploads directory if it doesn't exist
+// Create uploads directory
 const createUploadsDir = async () => {
   try {
     await fs.access('uploads');
@@ -58,16 +58,13 @@ mongoose.connect(MONGODB_URI, {
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// User Schema
+// Schemas
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true, trim: true },
   password: { type: String, required: true },
   gender: { type: String, enum: ["Male", "Female"], required: true }
 });
 
-const User = mongoose.model('User', userSchema);
-
-// Recording Schema
 const recordingSchema = new mongoose.Schema({
   ayatIndex: { type: Number, required: true, unique: true },
   ayatText: { type: String, required: true },
@@ -78,22 +75,36 @@ const recordingSchema = new mongoose.Schema({
   isVerified: { type: Boolean, default: false }
 });
 
-const Recording = mongoose.model('Recording', recordingSchema);
-
-// Multer memory storage (we upload to B2 from memory, no disk)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 } // 15MB
+const memorizationSchema = new mongoose.Schema({
+  ayatIndex: { type: Number, required: true },
+  ayatText: { type: String, required: true },
+  audioPath: { type: String, required: true },
+  recordedAt: { type: Date, default: Date.now },
+  recorderName: { type: String, required: true },
+  recorderGender: { type: String, enum: ["Male", "Female"], required: true },
+  isVerified: { type: Boolean, default: false }
 });
 
-let ayats = []; // ✅ NEW: Will store complete ayat data with surah info
+memorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
 
-// ✅ NEW: Load ayats from Excel file
+const User = mongoose.model('User', userSchema);
+const Recording = mongoose.model('Recording', recordingSchema);
+const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
+
+// Multer
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 }
+});
+
+let ayats = [];
+
+// Load ayats from Excel
 const loadAyatsFromExcel = async () => {
   try {
     console.log('🔍 Looking for Excel file...');
     const filePath = path.join(__dirname, 'data', 'Kaggle - The Quran Dataset.xlsx');
-    // Check if file exists
+    
     if (!fsSync.existsSync(filePath)) {
       throw new Error(`Excel file not found at: ${filePath}`);
     }
@@ -101,60 +112,38 @@ const loadAyatsFromExcel = async () => {
     console.log('📁 Excel file found, reading...');
     const workbook = XLSX.readFile(filePath);
     const sheetName = workbook.SheetNames[0];
-    console.log('📋 Sheet name:', sheetName);
-
     const worksheet = workbook.Sheets[sheetName];
     const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
     console.log(`📊 Loaded ${jsonData.length} rows from Excel`);
 
-    // Debug: Show first row to see column structure
-    if (jsonData.length > 0) {
-      console.log('🔎 First row columns:', Object.keys(jsonData[0]));
-      console.log('🔎 First row data:', jsonData[0]);
-    }
-
-    // Map the data to our format using exact column names
-    const formattedAyats = jsonData.map((row, index) => {
-      const ayat = {
-        index: index, // 0-based index for our system
-        text: row.uthmani_script || row['uthmani_script'] || '', // Default to Uthmani by default
-        uthmani_script: row.uthmani_script || row['uthmani_script'] || '',
-        indopak_script: row.indopak_script || row['indopak_script'] || '',
-
-        surahNameAr: row.surah_name_ar || row['surah_name_ar'] || '',
-        surahNameEn: row.surah_name_en || row['surah_name_en'] || '',
-        surahNo: row.surah_no || row['surah_no'] || 0,
-        ayahNoInSurah: row.ayah_no_surah || row['ayah_no_surah'] || 0,
-        ayahNoQuran: row.ayah_no_quran || row['ayah_no_quran'] || 0,
-        juzNo: row.juz_no || row['juz_no'] || 0,
-        rukoNo: row.ruko_no || row['ruko_no'] || 0
-      };
-
-      // Debug: Log first few ayats
-      if (index < 3) {
-        console.log(`🔎 Ayat ${index}:`, ayat);
-      }
-
-      return ayat;
-    });
+    const formattedAyats = jsonData.map((row, index) => ({
+      index: index,
+      text: row.uthmani_script || row['uthmani_script'] || '',
+      uthmani_script: row.uthmani_script || row['uthmani_script'] || '',
+      indopak_script: row.indopak_script || row['indopak_script'] || '',
+      surahNameAr: row.surah_name_ar || row['surah_name_ar'] || '',
+      surahNameEn: row.surah_name_en || row['surah_name_en'] || '',
+      surahNo: row.surah_no || row['surah_no'] || 0,
+      ayahNoInSurah: row.ayah_no_surah || row['ayah_no_surah'] || 0,
+      ayahNoQuran: row.ayah_no_quran || row['ayah_no_quran'] || 0,
+      juzNo: row.juz_no || row['juz_no'] || 0,
+      rukoNo: row.ruko_no || row['ruko_no'] || 0
+    }));
 
     console.log(`✅ Successfully formatted ${formattedAyats.length} ayats`);
     return formattedAyats;
   } catch (error) {
     console.error('❌ Error loading Excel file:', error);
-    console.error('📁 Make sure "Kaggle - The Quran Dataset.xlsx" is in the server root directory');
-
-    // Fallback: Return empty array to prevent crashes
     return [];
   }
 };
 
-// Hardcoded admin credentials
+// Admin credentials
 const ADMIN_PASSWORD = "2025";
 const ADMIN_SECRET = "supersecretkey";
 
-// User auth middleware
+// Auth middleware
 const userAuth = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'No token provided' });
@@ -169,13 +158,27 @@ const userAuth = (req, res, next) => {
   }
 };
 
-// Define routes after Excel is loaded
+const adminAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'No token' });
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, ADMIN_SECRET);
+    if (decoded.role !== 'admin') throw new Error('Not admin');
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+};
+
+// Load ayats
 loadAyatsFromExcel().then((ayatsData) => {
   ayats = ayatsData;
   console.log(`Total ayats loaded: ${ayats.length}`);
 });
 
-// User Registration
+// User routes
 app.post('/api/users/register', async (req, res) => {
   try {
     const { name, password, gender } = req.body;
@@ -219,7 +222,6 @@ app.post('/api/users/register', async (req, res) => {
   }
 });
 
-// User Login
 app.post('/api/users/login', async (req, res) => {
   try {
     const { name, password } = req.body;
@@ -247,13 +249,9 @@ app.post('/api/users/login', async (req, res) => {
   }
 });
 
-
-
-
+// Ayat routes
 app.get('/api/ayats/next', userAuth, async (req, res) => {
   try {
-    console.log('🔍 API /api/ayats/next called');
-
     const recordedAyats = await Recording.find({}, 'ayatIndex');
     const recordedIndices = recordedAyats.map(r => r.ayatIndex);
     const nextAyat = ayats.find(ayat => !recordedIndices.includes(ayat.index));
@@ -266,7 +264,6 @@ app.get('/api/ayats/next', userAuth, async (req, res) => {
       });
     }
 
-    // ✅ Ensure both scripts are included in the response
     const formattedAyat = {
       ...nextAyat,
       uthmani_script: nextAyat.uthmani_script || '',
@@ -274,27 +271,19 @@ app.get('/api/ayats/next', userAuth, async (req, res) => {
       text: nextAyat.uthmani_script || nextAyat.text || ''
     };
 
-    console.log('✅ Sending ayat with scripts:', {
-      uthmani_sample: formattedAyat.uthmani_script?.slice(0, 20),
-      indopak_sample: formattedAyat.indopak_script?.slice(0, 20)
-    });
-
     res.json({
       ayat: formattedAyat,
       recordedCount: recordedIndices.length,
       totalAyats: ayats.length
     });
   } catch (error) {
-    console.error('❌ Error fetching next ayat:', error);
+    console.error('Error fetching next ayat:', error);
     res.status(500).json({ error: 'Failed to fetch next ayat' });
   }
 });
 
-
 app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
   try {
-    console.log('🔍 API /api/ayats/next-after called with index:', req.params.index);
-
     const currentIndex = parseInt(req.params.index);
     if (isNaN(currentIndex) || currentIndex < -1 || currentIndex >= ayats.length) {
       return res.status(400).json({ error: 'Invalid current index' });
@@ -319,7 +308,6 @@ app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
       });
     }
 
-    // ✅ Include both scripts in response
     const formattedAyat = {
       ...nextAyat,
       uthmani_script: nextAyat.uthmani_script || '',
@@ -327,26 +315,17 @@ app.get('/api/ayats/next-after/:index', userAuth, async (req, res) => {
       text: nextAyat.uthmani_script || nextAyat.text || ''
     };
 
-    console.log('✅ Sending next-after ayat with scripts:', {
-      uthmani_sample: formattedAyat.uthmani_script?.slice(0, 20),
-      indopak_sample: formattedAyat.indopak_script?.slice(0, 20)
-    });
-    console.log("🧩 Sample ayat from memory:", ayats[0]);
-    console.log("🧩 Next ayat found:", nextAyat);
-
     res.json({
       ayat: formattedAyat,
       recordedCount: recordedSet.size,
       totalAyats: ayats.length
     });
   } catch (error) {
-    console.error('❌ Error fetching next ayat after index:', error);
+    console.error('Error fetching next ayat after index:', error);
     res.status(500).json({ error: 'Failed to fetch next ayat' });
   }
 });
 
-
-// Get all ayats status (secured)
 app.get('/api/ayats/status', userAuth, async (req, res) => {
   try {
     const recordings = await Recording.find({}, 'ayatIndex');
@@ -368,8 +347,7 @@ app.get('/api/ayats/status', userAuth, async (req, res) => {
   }
 });
 
-
-
+// Recording routes
 app.post('/api/recordings/save', userAuth, upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
@@ -413,7 +391,6 @@ app.post('/api/recordings/save', userAuth, upload.single('audio'), async (req, r
   }
 });
 
-// Get all recordings (secured)
 app.get('/api/recordings', userAuth, async (req, res) => {
   try {
     const recordings = await Recording.find().sort('ayatIndex');
@@ -424,7 +401,6 @@ app.get('/api/recordings', userAuth, async (req, res) => {
   }
 });
 
-// Get single recording by ayat index (secured)
 app.get('/api/recordings/:index', userAuth, async (req, res) => {
   try {
     const recording = await Recording.findOne({ ayatIndex: parseInt(req.params.index) });
@@ -440,7 +416,7 @@ app.get('/api/recordings/:index', userAuth, async (req, res) => {
   }
 });
 
-// ✅ NEW: Get ayats by Surah (secured)
+// Surah routes
 app.get('/api/surah/:surahNum', userAuth, async (req, res) => {
   try {
     const surahNum = parseInt(req.params.surahNum);
@@ -461,7 +437,6 @@ app.get('/api/surah/:surahNum', userAuth, async (req, res) => {
   }
 });
 
-// ✅ NEW: Get ayats by Para/Juz (secured)
 app.get('/api/para/:paraNum', userAuth, async (req, res) => {
   try {
     const paraNum = parseInt(req.params.paraNum);
@@ -481,7 +456,6 @@ app.get('/api/para/:paraNum', userAuth, async (req, res) => {
   }
 });
 
-// ✅ NEW: Get all Surahs list (secured)
 app.get('/api/surahs', userAuth, async (req, res) => {
   try {
     const surahs = [];
@@ -506,117 +480,24 @@ app.get('/api/surahs', userAuth, async (req, res) => {
   }
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    totalAyats: ayats.length,
-    mongoConnected: mongoose.connection.readyState === 1
-  });
-});
-
-// Admin auth middleware
-const adminAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'No token' });
-
-  const token = authHeader.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, ADMIN_SECRET);
-    if (decoded.role !== 'admin') throw new Error('Not admin');
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-};
-
-// Delete recording (delete from B2 + DB)
-app.delete('/api/recordings/:index', adminAuth, async (req, res) => {
-  try {
-    const idx = parseInt(req.params.index);
-    const rec = await Recording.findOne({ ayatIndex: idx });
-    if (!rec) return res.status(404).json({ error: 'Recording not found' });
-
-    // delete from B2
-    await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rec.audioPath }));
-
-    // delete db
-    await rec.deleteOne();
-
-    res.json({ message: 'Recording deleted successfully' });
-  } catch (err) {
-    console.error('Error deleting recording:', err);
-    res.status(500).json({ error: 'Failed to delete recording' });
-  }
-});
-
-// Toggle verification
-app.patch('/api/recordings/:index', adminAuth, async (req, res) => {
-  try {
-    const idx = parseInt(req.params.index);
-    const rec = await Recording.findOne({ ayatIndex: idx });
-    if (!rec) return res.status(404).json({ error: 'Recording not found' });
-
-    rec.isVerified = !rec.isVerified;
-    await rec.save();
-
-    res.json({ message: 'Verification updated', verified: rec.isVerified });
-  } catch (err) {
-    console.error('Error verifying recording:', err);
-    res.status(500).json({ error: 'Failed to update verification' });
-  }
-});
-
-// Admin login
-app.post('/api/admin/login', (req, res) => {
-  const { password } = req.body;
-  if (password === ADMIN_PASSWORD) {
-    const token = jwt.sign({ role: 'admin' }, ADMIN_SECRET, { expiresIn: '2h' });
-    return res.json({ success: true, token });
-  }
-  return res.status(401).json({ success: false, error: 'Invalid password' });
-});
-
-//====================================================================================
-// Add these routes to your server.js file after the existing routes
-
-// Memorization Recording Schema (add this after the Recording schema)
-const memorizationSchema = new mongoose.Schema({
-  ayatIndex: { type: Number, required: true },
-  ayatText: { type: String, required: true },
-  audioPath: { type: String, required: true },
-  recordedAt: { type: Date, default: Date.now },
-  recorderName: { type: String, required: true },
-  recorderGender: { type: String, enum: ["Male", "Female"], required: true },
-  isVerified: { type: Boolean, default: false }
-});
-
-// Create compound index to allow multiple recordings per user per ayat
-memorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
-
-const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
-
-// Get next unrecorded ayat from Para 30 for current user
+// Memorization routes
 app.get('/api/memorization/next', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
     if (!userName) return res.status(401).json({ error: 'User not authenticated' });
 
-    // Filter ayats for Para 30 (juzNo === 30)
     const para30Ayats = ayats.filter(ayat => ayat.juzNo === 30);
 
     if (para30Ayats.length === 0) {
       return res.status(404).json({ error: 'Para 30 data not found' });
     }
 
-    // Get user's recorded ayats from Para 30
     const userRecordings = await MemorizationRecording.find(
       { recorderName: userName },
       'ayatIndex'
     );
     const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
 
-    // Find next unrecorded ayat
     const nextAyat = para30Ayats.find(ayat => !recordedIndices.includes(ayat.index));
 
     if (!nextAyat) {
@@ -645,7 +526,6 @@ app.get('/api/memorization/next', userAuth, async (req, res) => {
   }
 });
 
-// Save memorization recording
 app.post('/api/memorization/save', userAuth, upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
@@ -660,13 +540,11 @@ app.post('/api/memorization/save', userAuth, upload.single('audio'), async (req,
 
     const ayatIdx = parseInt(ayatIndex);
     
-    // Verify ayat is from Para 30
     const ayat = ayats.find(a => a.index === ayatIdx);
     if (!ayat || ayat.juzNo !== 30) {
       return res.status(400).json({ error: 'Invalid ayat or not from Para 30' });
     }
 
-    // Upload to B2/S3
     const ext = req.file.mimetype.includes('wav') ? 'wav' 
                 : req.file.mimetype.includes('mpeg') ? 'mp3' 
                 : 'webm';
@@ -679,7 +557,6 @@ app.post('/api/memorization/save', userAuth, upload.single('audio'), async (req,
       ContentType: req.file.mimetype,
     }));
 
-    // Save to database (allows multiple recordings)
     const recording = new MemorizationRecording({
       ayatIndex: ayatIdx,
       ayatText,
@@ -700,7 +577,6 @@ app.post('/api/memorization/save', userAuth, upload.single('audio'), async (req,
   }
 });
 
-// Get user's memorization history
 app.get('/api/memorization/history', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
@@ -716,7 +592,6 @@ app.get('/api/memorization/history', userAuth, async (req, res) => {
   }
 });
 
-// Delete user's own memorization recording
 app.delete('/api/memorization/:id', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
@@ -731,13 +606,11 @@ app.delete('/api/memorization/:id', userAuth, async (req, res) => {
       return res.status(404).json({ error: 'Recording not found or not owned by user' });
     }
 
-    // Delete from B2
     await s3.send(new DeleteObjectCommand({ 
       Bucket: BUCKET, 
       Key: recording.audioPath 
     }));
 
-    // Delete from database
     await recording.deleteOne();
 
     res.json({ message: 'Recording deleted successfully' });
@@ -747,7 +620,6 @@ app.delete('/api/memorization/:id', userAuth, async (req, res) => {
   }
 });
 
-// Get all users' memorization progress (for admin or statistics)
 app.get('/api/memorization/all-progress', userAuth, async (req, res) => {
   try {
     const recordings = await MemorizationRecording.find({}, 'recorderName ayatIndex');
@@ -776,307 +648,24 @@ app.get('/api/memorization/all-progress', userAuth, async (req, res) => {
   }
 });
 
-
-//==================CSV Me Ayat Text Column==================
-// Get ALL ayats without pagination (for CSV export)
-// app.get('/api/admin/ayats/all', adminAuth, async (req, res) => {
-//   try {
-//     const recordings = await Recording.find({});
-//     const recordedMap = new Map(recordings.map(r => [r.ayatIndex, r]));
-
-//     const items = await Promise.all(ayats.map(async (ayat) => {
-//       const rec = recordedMap.get(ayat.index);
-//       if (!rec) {
-//         return {
-//           ...ayat,
-//           isRecorded: false,
-//           audioUrl: null,
-//           recorderName: null,
-//           recorderGender: null,
-//           isVerified: false
-//         };
-//       }
-
-//       return {
-//         ...ayat,
-//         isRecorded: true,
-//         audioPath: rec.audioPath,
-//         recordedAt: rec.recordedAt,
-//         recorderName: rec.recorderName,
-//         recorderGender: rec.recorderGender,
-//         isVerified: rec.isVerified
-//       };
-//     }));
-
-//     res.json({ data: items });
-//   } catch (err) {
-//     console.error("Error fetching all ayats:", err);
-//     res.status(500).json({ error: "Failed to fetch ayats" });
-//   }
-// });
-
-// // Get ALL memorization recordings without pagination (for CSV export)
-// app.get('/api/admin/memorization/all', adminAuth, async (req, res) => {
-//   try {
-//     const recordings = await MemorizationRecording.find({})
-//       .sort({ recordedAt: -1 });
-
-//     res.json({ recordings });
-//   } catch (err) {
-//     console.error("Error fetching all memorization recordings:", err);
-//     res.status(500).json({ error: "Failed to fetch recordings" });
-//   }
-// });
-//===========================================================
-
-
-//===========================================================
-// Admin: get memorization with pagination
-app.get('/api/admin/memorization', adminAuth, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 200;
-    const skip = (page - 1) * limit;
-
-    const totalRecordings = await MemorizationRecording.countDocuments();
-    const recordings = await MemorizationRecording.find({})
-      .sort({ recordedAt: -1 })
-      .skip(skip)
-      .limit(limit);
-
-    const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
-      const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
-      const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
-
-      return {
-        _id: rec._id,
-        ayatIndex: rec.ayatIndex,
-        ayatText: rec.ayatText,
-        audioUrl: signedUrl,
-        audioPath: rec.audioPath,
-        recordedAt: rec.recordedAt,
-        recorderName: rec.recorderName,
-        recorderGender: rec.recorderGender,
-        isVerified: rec.isVerified
-      };
-    }));
-
-    res.json({
-      recordings: recordingsWithUrls,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(totalRecordings / limit),
-        totalItems: totalRecordings,
-        itemsPerPage: limit
-      }
-    });
-  } catch (err) {
-    console.error("Error fetching admin memorization recordings:", err);
-    res.status(500).json({ error: "Failed to fetch recordings" });
-  }
-});
-
-// Delete memorization recording (admin only)
-app.delete('/api/admin/memorization/:id', adminAuth, async (req, res) => {
-  try {
-    const recordingId = req.params.id;
-    const recording = await MemorizationRecording.findById(recordingId);
-
-    if (!recording) {
-      return res.status(404).json({ error: 'Recording not found' });
-    }
-
-    await s3.send(new DeleteObjectCommand({ 
-      Bucket: BUCKET, 
-      Key: recording.audioPath 
-    }));
-
-    await recording.deleteOne();
-
-    res.json({ message: 'Recording deleted successfully' });
-  } catch (err) {
-    console.error('Error deleting memorization recording:', err);
-    res.status(500).json({ error: 'Failed to delete recording' });
-  }
-});
-
-
-// Toggle verification for memorization recording (admin only)
-app.patch('/api/admin/memorization/verify/:id', adminAuth, async (req, res) => {
-  try {
-    const recordingId = req.params.id;
-    const recording = await MemorizationRecording.findById(recordingId);
-
-    if (!recording) {
-      return res.status(404).json({ error: 'Recording not found' });
-    }
-
-    // Toggle verification status
-    recording.isVerified = !recording.isVerified;
-    await recording.save();
-
-    res.json({ 
-      message: 'Verification updated successfully',
-      isVerified: recording.isVerified 
-    });
-  } catch (err) {
-    console.error('Error updating memorization verification:', err);
-    res.status(500).json({ error: 'Failed to update verification' });
-  }
-});
-
-// Replace your existing CSV export route with this in server.js
-
-// Export memorization recordings as CSV (Fixed with query token support)
-// Add this route to your server.js (after other admin routes)
-
-// Export memorization recordings as CSV
-app.get('/api/admin/memorization/export-csv', adminAuth, async (req, res) => {
-  try {
-    const recordings = await MemorizationRecording.find({}).sort({ ayatIndex: 1, recorderName: 1 });
-
-    // CSV Header
-    let csv = 'Ayat_Index,Ayat_Number,Surah_Name,Para,Recorder_Name,Gender,Audio_Filename,Recorded_Date\n';
-
-    // Add each recording as a row
-    for (const rec of recordings) {
-      const ayat = ayats.find(a => a.index === rec.ayatIndex);
-      
-      // Create unique filename with user name
-      const timestamp = new Date(rec.recordedAt).getTime();
-      const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
-      
-      const row = [
-        rec.ayatIndex,
-        rec.ayatIndex + 1, // Ayat number (1-based)
-        ayat ? `"${ayat.surahNameEn} (${ayat.surahNameAr})"` : 'Unknown',
-        ayat ? ayat.juzNo : 30,
-        `"${rec.recorderName}"`,
-        rec.recorderGender,
-        uniqueFilename,
-        new Date(rec.recordedAt).toISOString()
-      ].join(',');
-      
-      csv += row + '\n';
-    }
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=memorization_para30_recordings.csv');
-    res.send(csv);
-  } catch (err) {
-    console.error('Error exporting memorization CSV:', err);
-    res.status(500).json({ error: 'Failed to export CSV' });
-  }
-});
-
-// Download memorization recordings with unique filenames (UPDATED)
-app.get('/api/download-memorization-audios', async (req, res) => {
-  try {
-    const recordings = await MemorizationRecording.find({}).sort({ recorderName: 1, ayatIndex: 1 });
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=memorization_para30_recordings.zip');
-
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    archive.pipe(res);
-
-    for (const rec of recordings) {
-      if (!rec.audioPath) continue;
-
-      try {
-        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
-        const data = await s3.send(getCmd);
-        
-        // Create unique filename with user name
-        const timestamp = new Date(rec.recordedAt).getTime();
-        const folderName = `${rec.recorderName}_${rec.recorderGender}`;
-        const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
-        const filePath = `${folderName}/${uniqueFilename}`;
-        
-        archive.append(data.Body, { name: filePath });
-      } catch (err) {
-        if (err.Code === "NoSuchKey") {
-          console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
-          continue;
-        } else {
-          console.error(`Error fetching ${rec.audioPath}:`, err);
-        }
-      }
-    }
-
-    await archive.finalize();
-  } catch (err) {
-    console.error('Error building memorization zip:', err);
-    res.status(500).json({ error: 'Failed to build zip' });
-  }
-});
-// Download memorization recordings with unique filenames
-app.get('/api/download-memorization-audios', async (req, res) => {
-  try {
-    const recordings = await MemorizationRecording.find({}).sort({ recorderName: 1, ayatIndex: 1 });
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=memorization_para30_recordings.zip');
-
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    archive.pipe(res);
-
-    for (const rec of recordings) {
-      if (!rec.audioPath) continue;
-
-      try {
-        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
-        const data = await s3.send(getCmd);
-        
-        const timestamp = new Date(rec.recordedAt).getTime();
-        const folderName = `${rec.recorderName}_${rec.recorderGender}`;
-        const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
-        const filePath = `${folderName}/${uniqueFilename}`;
-        
-        archive.append(data.Body, { name: filePath });
-      } catch (err) {
-        if (err.Code === "NoSuchKey") {
-          console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
-          continue;
-        } else {
-          console.error(`Error fetching ${rec.audioPath}:`, err);
-        }
-      }
-    }
-
-    await archive.finalize();
-  } catch (err) {
-    console.error('Error building memorization zip:', err);
-    res.status(500).json({ error: 'Failed to build zip' });
-  }
-});
-
-
-//======================================================================================
-
-// Add this route to your server.js (after memorization routes)
-
-// Get next group of unrecorded ayats from Para 30 for bulk recording (Surah-wise)
+// Bulk recording
 app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
     if (!userName) return res.status(401).json({ error: 'User not authenticated' });
 
-    // Filter ayats for Para 30 (juzNo === 30)
     const para30Ayats = ayats.filter(ayat => ayat.juzNo === 30);
 
     if (para30Ayats.length === 0) {
       return res.status(404).json({ error: 'Para 30 data not found' });
     }
 
-    // Get user's recorded ayats from Para 30
     const userRecordings = await MemorizationRecording.find(
       { recorderName: userName },
       'ayatIndex'
     );
     const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
 
-    // Find unrecorded ayats
     const unrecordedAyats = para30Ayats.filter(ayat => !recordedIndices.includes(ayat.index));
 
     if (unrecordedAyats.length === 0) {
@@ -1087,7 +676,6 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
       });
     }
 
-    // Get all unique surahs in Para 30 from unrecorded ayats
     const unrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
     
     if (unrecordedSurahs.length === 0) {
@@ -1099,27 +687,16 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
     }
 
     let groupSurahs = [];
-    let nextGroup = [];
-
-    // Find next group based on first unrecorded surah
     const firstSurah = unrecordedSurahs[0];
 
-    // Strategy:
-    // Surah 78-93: 1 at a time
-    // Surah 94-104: 2 at a time
-    // Surah 105-114: 5 at a time
-
     if (firstSurah <= 93) {
-      // Single surah (78-93)
       groupSurahs = [firstSurah];
     } else if (firstSurah <= 104) {
-      // Pairs (94-104)
       groupSurahs = [firstSurah];
       if (unrecordedSurahs.includes(firstSurah + 1) && firstSurah + 1 <= 104) {
         groupSurahs.push(firstSurah + 1);
       }
     } else {
-      // Groups of 5 (105-114)
       groupSurahs = [firstSurah];
       for (let i = 1; i < 5; i++) {
         if (unrecordedSurahs.includes(firstSurah + i) && firstSurah + i <= 114) {
@@ -1128,13 +705,9 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
       }
     }
 
-    // Get all ayats for selected surahs
-    nextGroup = unrecordedAyats.filter(ayat => groupSurahs.includes(ayat.surahNo));
-
-    // Sort by ayat index
+    const nextGroup = unrecordedAyats.filter(ayat => groupSurahs.includes(ayat.surahNo));
     nextGroup.sort((a, b) => a.index - b.index);
 
-    // Format ayats with both scripts
     const formattedAyats = nextGroup.map(ayat => ({
       ...ayat,
       uthmani_script: ayat.uthmani_script || '',
@@ -1157,11 +730,16 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
   }
 });
 
-//==============================================================================================
+// Admin routes
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  if (password === ADMIN_PASSWORD) {
+    const token = jwt.sign({ role: 'admin' }, ADMIN_SECRET, { expiresIn: '2h' });
+    return res.json({ success: true, token });
+  }
+  return res.status(401).json({ success: false, error: 'Invalid password' });
+});
 
-
-
-// Admin: get ayats with pagination
 app.get('/api/admin/ayats', adminAuth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -1171,7 +749,6 @@ app.get('/api/admin/ayats', adminAuth, async (req, res) => {
     const recordings = await Recording.find({});
     const recordedMap = new Map(recordings.map(r => [r.ayatIndex, r]));
 
-    // Get paginated ayats
     const paginatedAyats = ayats.slice(skip, skip + limit);
 
     const items = await Promise.all(paginatedAyats.map(async (ayat) => {
@@ -1216,48 +793,346 @@ app.get('/api/admin/ayats', adminAuth, async (req, res) => {
   }
 });
 
+app.get('/api/admin/memorization', adminAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 200;
+    const skip = (page - 1) * limit;
 
-// Download all audios as zip (stream from B2)
+    const totalRecordings = await MemorizationRecording.countDocuments();
+    const recordings = await MemorizationRecording.find({})
+      .sort({ recordedAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
+      const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+      const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
+
+      return {
+        _id: rec._id,
+        ayatIndex: rec.ayatIndex,
+        ayatText: rec.ayatText,
+        audioUrl: signedUrl,
+        audioPath: rec.audioPath,
+        recordedAt: rec.recordedAt,
+        recorderName: rec.recorderName,
+        recorderGender: rec.recorderGender,
+        isVerified: rec.isVerified
+      };
+    }));
+
+    res.json({
+      recordings: recordingsWithUrls,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalRecordings / limit),
+        totalItems: totalRecordings,
+        itemsPerPage: limit
+      }
+    });
+  } catch (err) {
+    console.error("Error fetching admin memorization recordings:", err);
+    res.status(500).json({ error: "Failed to fetch recordings" });
+  }
+});
+
+app.delete('/api/recordings/:index', adminAuth, async (req, res) => {
+  try {
+    const idx = parseInt(req.params.index);
+    const rec = await Recording.findOne({ ayatIndex: idx });
+    if (!rec) return res.status(404).json({ error: 'Recording not found' });
+
+    await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rec.audioPath }));
+    await rec.deleteOne();
+
+    res.json({ message: 'Recording deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+app.delete('/api/admin/memorization/:id', adminAuth, async (req, res) => {
+  try {
+    const recordingId = req.params.id;
+    const recording = await MemorizationRecording.findById(recordingId);
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+
+    await s3.send(new DeleteObjectCommand({ 
+      Bucket: BUCKET, 
+      Key: recording.audioPath 
+    }));
+
+    await recording.deleteOne();
+
+    res.json({ message: 'Recording deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting memorization recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+app.patch('/api/recordings/:index', adminAuth, async (req, res) => {
+  try {
+    const idx = parseInt(req.params.index);
+    const rec = await Recording.findOne({ ayatIndex: idx });
+    if (!rec) return res.status(404).json({ error: 'Recording not found' });
+
+    rec.isVerified = !rec.isVerified;
+    await rec.save();
+
+    res.json({ message: 'Verification updated', verified: rec.isVerified });
+  } catch (err) {
+    console.error('Error verifying recording:', err);
+    res.status(500).json({ error: 'Failed to update verification' });
+  }
+});
+
+app.patch('/api/admin/memorization/verify/:id', adminAuth, async (req, res) => {
+  try {
+    const recordingId = req.params.id;
+    const recording = await MemorizationRecording.findById(recordingId);
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+
+    recording.isVerified = !recording.isVerified;
+    await recording.save();
+
+    res.json({ 
+      message: 'Verification updated successfully',
+      isVerified: recording.isVerified 
+    });
+  } catch (err) {
+    console.error('Error updating memorization verification:', err);
+    res.status(500).json({ error: 'Failed to update verification' });
+  }
+});
+
+// CSV Export
+app.get('/api/admin/memorization/export-csv', adminAuth, async (req, res) => {
+  try {
+    const recordings = await MemorizationRecording.find({}).sort({ ayatIndex: 1, recorderName: 1 });
+
+    let csv = 'Ayat_Index,Ayat_Number,Surah_Name,Para,Recorder_Name,Gender,Audio_Filename,Recorded_Date\n';
+
+    for (const rec of recordings) {
+      const ayat = ayats.find(a => a.index === rec.ayatIndex);
+      
+      const timestamp = new Date(rec.recordedAt).getTime();
+      const uniqueFilename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
+      
+      const row = [
+        rec.ayatIndex,
+        rec.ayatIndex + 1,
+        ayat ? `"${ayat.surahNameEn} (${ayat.surahNameAr})"` : 'Unknown',
+        ayat ? ayat.juzNo : 30,
+        `"${rec.recorderName}"`,
+        rec.recorderGender,
+        uniqueFilename,
+        new Date(rec.recordedAt).toISOString()
+      ].join(',');
+      
+      csv += row + '\n';
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=memorization_para30_recordings.csv');
+    res.send(csv);
+  } catch (err) {
+    console.error('Error exporting memorization CSV:', err);
+    res.status(500).json({ error: 'Failed to export CSV' });
+  }
+});
+
+// REPLACE these two routes in your server.js
+
+// Download recordings in chunks - FIXED VERSION with Readable Stream
 app.get('/api/download-audios', async (req, res) => {
   try {
-    const recordings = await Recording.find({});
+    const start = parseInt(req.query.start);
+    const end = parseInt(req.query.end);
+    
+    // Validate parameters
+    if (!start || !end || start < 1 || end < start) {
+      return res.status(400).json({ error: 'Invalid start/end parameters' });
+    }
+    
+    console.log(`📦 ZIP Download request: ${start} to ${end}`);
+    
+    // Get ALL recordings first, then slice
+    const allRecordings = await Recording.find({})
+      .sort({ ayatIndex: 1 });
+    
+    console.log(`📊 Total recordings in DB: ${allRecordings.length}`);
+    
+    // Slice to get chunk (arrays are 0-indexed, so start-1)
+    const recordings = allRecordings.slice(start - 1, end);
+    
+    console.log(`✅ Chunk size: ${recordings.length} (from ${start} to ${end})`);
+
+    if (recordings.length === 0) {
+      return res.status(404).json({ error: 'No recordings found in this range' });
+    }
 
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=audios.zip');
+    res.setHeader('Content-Disposition', `attachment; filename=recorder_audios_${start}_to_${end}.zip`);
 
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = archiver('zip', { 
+      zlib: { level: 9 }
+    });
+    
+    // Handle errors properly
+    archive.on('error', (err) => {
+      console.error('❌ Archive error:', err);
+      throw err;
+    });
+
+    // Pipe archive to response
     archive.pipe(res);
 
+    let fileCount = 0;
     for (const rec of recordings) {
       if (!rec.audioPath) continue;
 
       try {
+        console.log(`📥 Fetching ${fileCount + 1}/${recordings.length}: ${rec.audioPath}`);
         const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
-        const data = await s3.send(getCmd);
-        archive.append(data.Body, { name: rec.audioPath });
+        const { Body } = await s3.send(getCmd);
+        
+        const filename = `ayat_${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}.webm`;
+        
+        // Append stream directly without converting to buffer
+        archive.append(Body, { name: filename });
+        fileCount++;
+        console.log(`✅ Added ${fileCount}: ${filename}`);
       } catch (err) {
-        if (err.Code === "NoSuchKey") {
-          console.warn(`⚠ Skipping missing file in B2: ${rec.audioPath}`);
+        if (err.Code === "NoSuchKey" || err.name === "NoSuchKey") {
+          console.warn(`⚠️ Skipping missing file: ${rec.audioPath}`);
           continue;
         } else {
-          console.error(`Error fetching ${rec.audioPath}:`, err);
+          console.error(`❌ Error fetching ${rec.audioPath}:`, err);
+          throw err;
         }
       }
     }
 
+    console.log(`🔄 Finalizing archive with ${fileCount} files...`);
+    
+    // Finalize the archive
     await archive.finalize();
+    
+    console.log('✅ Archive finalized successfully');
+    
   } catch (err) {
-    console.error('Error building zip:', err);
-    res.status(500).json({ error: 'Failed to build zip' });
+    console.error('❌ Error building zip:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to build zip: ' + err.message });
+    }
   }
 });
 
+// Download memorization recordings in chunks - FIXED VERSION with Readable Stream
+app.get('/api/download-memorization-audios', async (req, res) => {
+  try {
+    const start = parseInt(req.query.start);
+    const end = parseInt(req.query.end);
+    
+    // Validate parameters
+    if (!start || !end || start < 1 || end < start) {
+      return res.status(400).json({ error: 'Invalid start/end parameters' });
+    }
+    
+    console.log(`📦 Memorization ZIP Download request: ${start} to ${end}`);
+    
+    // Get ALL recordings first, then slice
+    const allRecordings = await MemorizationRecording.find({})
+      .sort({ recorderName: 1, ayatIndex: 1 });
+    
+    console.log(`📊 Total recordings in DB: ${allRecordings.length}`);
+    
+    // Slice to get chunk (arrays are 0-indexed, so start-1)
+    const recordings = allRecordings.slice(start - 1, end);
+    
+    console.log(`✅ Chunk size: ${recordings.length} (from ${start} to ${end})`);
 
-//========================================
+    if (recordings.length === 0) {
+      return res.status(404).json({ error: 'No recordings found in this range' });
+    }
 
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=para30_recordings_${start}_to_${end}.zip`);
 
+    const archive = archiver('zip', { 
+      zlib: { level: 9 }
+    });
+    
+    // Handle errors properly
+    archive.on('error', (err) => {
+      console.error('❌ Archive error:', err);
+      throw err;
+    });
 
-//=====================================================================================
+    // Pipe archive to response
+    archive.pipe(res);
+
+    let fileCount = 0;
+    for (const rec of recordings) {
+      if (!rec.audioPath) continue;
+
+      try {
+        console.log(`📥 Fetching ${fileCount + 1}/${recordings.length}: ${rec.audioPath}`);
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        const { Body } = await s3.send(getCmd);
+        
+        const timestamp = new Date(rec.recordedAt).getTime();
+        const folderName = `${rec.recorderName}_${rec.recorderGender}`;
+        const filename = `para30_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
+        const filePath = `${folderName}/${filename}`;
+        
+        // Append stream directly without converting to buffer
+        archive.append(Body, { name: filePath });
+        fileCount++;
+        console.log(`✅ Added ${fileCount}: ${filePath}`);
+      } catch (err) {
+        if (err.Code === "NoSuchKey" || err.name === "NoSuchKey") {
+          console.warn(`⚠️ Skipping missing file: ${rec.audioPath}`);
+          continue;
+        } else {
+          console.error(`❌ Error fetching ${rec.audioPath}:`, err);
+          throw err;
+        }
+      }
+    }
+
+    console.log(`🔄 Finalizing archive with ${fileCount} files...`);
+    
+    // Finalize the archive
+    await archive.finalize();
+    
+    console.log('✅ Archive finalized successfully');
+    
+  } catch (err) {
+    console.error('❌ Error building memorization zip:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to build zip: ' + err.message });
+    }
+  }
+});
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    totalAyats: ayats.length,
+    mongoConnected: mongoose.connection.readyState === 1
+  });
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
