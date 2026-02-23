@@ -963,6 +963,7 @@ app.get('/api/download-audios', async (req, res) => {
       return res.status(400).json({ error: 'Invalid start/end parameters' });
     }
     
+    
     console.log(`📦 ZIP Download request: ${start} to ${end}`);
     
     // Get ALL recordings first, then slice
