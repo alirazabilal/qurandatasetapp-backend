@@ -1125,6 +1125,231 @@ app.get('/api/download-memorization-audios', async (req, res) => {
     }
   }
 });
+// ===================== FLUTTER APP RECORDINGS =====================
+// Schema for recordings submitted by Flutter app users who opted into data sharing
+
+const flutterRecordingSchema = new mongoose.Schema({
+  deviceId: { type: String, required: true },
+  ayahIndex: { type: Number, required: true },
+  ayahText: { type: String, required: true },
+  surahNo: { type: Number, required: true },
+  surahName: { type: String, required: true },
+  ayahNumberInSurah: { type: Number, required: true },
+  source: { type: String, enum: ['recitation', 'memorization'], default: 'recitation' },
+  audioPath: { type: String, required: true },
+  recordedAt: { type: Date, default: Date.now },
+  isVerified: { type: Boolean, default: false }
+});
+
+const FlutterRecording = mongoose.model('FlutterRecording', flutterRecordingSchema);
+
+// POST /api/flutter-recordings/save — public endpoint (no auth), called from Flutter app
+app.post('/api/flutter-recordings/save', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
+
+    const { deviceId, ayahIndex, ayahText, surahNo, surahName, ayahNumberInSurah, source } = req.body;
+
+    if (!deviceId || !ayahText) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const ext = req.file.mimetype.includes('wav') ? 'wav'
+              : req.file.mimetype.includes('mpeg') ? 'mp3'
+              : 'webm';
+    const objectKey = `flutter_recordings/${String(deviceId).substring(0, 32)}_ayat${parseInt(ayahIndex) + 1}_${Date.now()}.${ext}`;
+
+    await s3.send(new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: objectKey,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+    }));
+
+    const recording = new FlutterRecording({
+      deviceId: String(deviceId).substring(0, 64),
+      ayahIndex: parseInt(ayahIndex) || 0,
+      ayahText: String(ayahText).substring(0, 500),
+      surahNo: parseInt(surahNo) || 0,
+      surahName: String(surahName || '').substring(0, 100),
+      ayahNumberInSurah: parseInt(ayahNumberInSurah) || 0,
+      source: ['recitation', 'memorization'].includes(source) ? source : 'recitation',
+      audioPath: objectKey
+    });
+
+    await recording.save();
+    res.json({ message: 'Recording saved', id: recording._id });
+  } catch (err) {
+    console.error('Error saving flutter recording:', err);
+    res.status(500).json({ error: 'Failed to save recording' });
+  }
+});
+
+// GET /api/admin/flutter-recordings — paginated list with signed URLs
+app.get('/api/admin/flutter-recordings', adminAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const skip = (page - 1) * limit;
+
+    const total = await FlutterRecording.countDocuments();
+    const recordings = await FlutterRecording.find({})
+      .sort({ recordedAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
+      let audioUrl = null;
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        audioUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
+      } catch (_) {}
+
+      return {
+        _id: rec._id,
+        deviceId: rec.deviceId,
+        ayahIndex: rec.ayahIndex,
+        ayahText: rec.ayahText,
+        surahNo: rec.surahNo,
+        surahName: rec.surahName,
+        ayahNumberInSurah: rec.ayahNumberInSurah,
+        source: rec.source,
+        audioPath: rec.audioPath,
+        audioUrl,
+        recordedAt: rec.recordedAt,
+        isVerified: rec.isVerified
+      };
+    }));
+
+    res.json({
+      recordings: recordingsWithUrls,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(total / limit),
+        totalItems: total,
+        itemsPerPage: limit
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching flutter recordings:', err);
+    res.status(500).json({ error: 'Failed to fetch recordings' });
+  }
+});
+
+// PATCH /api/admin/flutter-recordings/verify/:id
+app.patch('/api/admin/flutter-recordings/verify/:id', adminAuth, async (req, res) => {
+  try {
+    const rec = await FlutterRecording.findById(req.params.id);
+    if (!rec) return res.status(404).json({ error: 'Recording not found' });
+
+    rec.isVerified = !rec.isVerified;
+    await rec.save();
+
+    res.json({ message: 'Verification updated', isVerified: rec.isVerified });
+  } catch (err) {
+    console.error('Error verifying flutter recording:', err);
+    res.status(500).json({ error: 'Failed to update verification' });
+  }
+});
+
+// DELETE /api/admin/flutter-recordings/:id
+app.delete('/api/admin/flutter-recordings/:id', adminAuth, async (req, res) => {
+  try {
+    const rec = await FlutterRecording.findById(req.params.id);
+    if (!rec) return res.status(404).json({ error: 'Recording not found' });
+
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rec.audioPath }));
+    } catch (_) {}
+
+    await rec.deleteOne();
+    res.json({ message: 'Recording deleted' });
+  } catch (err) {
+    console.error('Error deleting flutter recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+// GET /api/admin/flutter-recordings/export-csv?verifiedOnly=true|false
+app.get('/api/admin/flutter-recordings/export-csv', adminAuth, async (req, res) => {
+  try {
+    const verifiedOnly = req.query.verifiedOnly === 'true';
+    const query = verifiedOnly ? { isVerified: true } : {};
+    const recordings = await FlutterRecording.find(query).sort({ recordedAt: -1 });
+
+    let csv = 'ID,Device_ID,Ayah_Index,Ayah_Number,Ayah_Text,Surah_No,Surah_Name,Ayah_In_Surah,Source,Audio_Path,Recorded_Date,Verified\n';
+
+    for (const rec of recordings) {
+      const ayatText = rec.ayahText.replace(/"/g, '""');
+      const row = [
+        rec._id,
+        rec.deviceId,
+        rec.ayahIndex,
+        rec.ayahIndex + 1,
+        `"${ayatText}"`,
+        rec.surahNo,
+        `"${rec.surahName}"`,
+        rec.ayahNumberInSurah,
+        rec.source,
+        rec.audioPath,
+        new Date(rec.recordedAt).toISOString(),
+        rec.isVerified ? 'Yes' : 'No'
+      ].join(',');
+      csv += row + '\n';
+    }
+
+    const filename = verifiedOnly ? 'flutter_recordings_verified.csv' : 'flutter_recordings_all.csv';
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+    res.send(csv);
+  } catch (err) {
+    console.error('Error exporting flutter recordings CSV:', err);
+    res.status(500).json({ error: 'Failed to export CSV' });
+  }
+});
+
+// GET /api/admin/flutter-recordings/download-audios?verifiedOnly=true|false
+app.get('/api/admin/flutter-recordings/download-audios', adminAuth, async (req, res) => {
+  try {
+    const verifiedOnly = req.query.verifiedOnly === 'true';
+    const query = verifiedOnly ? { isVerified: true } : {};
+    const recordings = await FlutterRecording.find(query).sort({ recordedAt: -1 });
+
+    if (recordings.length === 0) {
+      return res.status(404).json({ error: 'No recordings found' });
+    }
+
+    const filename = verifiedOnly ? 'flutter_verified.zip' : 'flutter_all.zip';
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => { throw err; });
+    archive.pipe(res);
+
+    for (const rec of recordings) {
+      if (!rec.audioPath) continue;
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        const { Body } = await s3.send(getCmd);
+        const ext = rec.audioPath.split('.').pop() || 'wav';
+        const fname = `surah${rec.surahNo}_ayat${rec.ayahNumberInSurah}_${rec.source}_${rec._id}.${ext}`;
+        archive.append(Body, { name: fname });
+      } catch (err) {
+        if (err.Code === 'NoSuchKey' || err.name === 'NoSuchKey') continue;
+        throw err;
+      }
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    console.error('Error building flutter recordings zip:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to build zip' });
+    }
+  }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
