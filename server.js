@@ -87,6 +87,20 @@ const memorizationSchema = new mongoose.Schema({
 
 memorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
 
+//===============29th para Schema========================
+const para29MemorizationSchema = new mongoose.Schema({
+  ayatIndex: { type: Number, required: true },
+  ayatText: { type: String, required: true },
+  audioPath: { type: String, required: true },
+  recordedAt: { type: Date, default: Date.now },
+  recorderName: { type: String, required: true },
+  recorderGender: { type: String, enum: ["Male", "Female"], required: true },
+  isVerified: { type: Boolean, default: false }
+});
+para29MemorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
+const Para29Recording = mongoose.model('Para29Recording', para29MemorizationSchema);
+//=========================================================================
+
 const User = mongoose.model('User', userSchema);
 const Recording = mongoose.model('Recording', recordingSchema);
 const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
@@ -1125,6 +1139,405 @@ app.get('/api/download-memorization-audios', async (req, res) => {
     }
   }
 });
+
+//======================29th para=============================
+// ============================================================
+// PARA 29 - NEW ROUTES - server.js mein add karein
+// In routes ko existing routes ke baad, health check se pehle paste karein
+// ============================================================
+
+// Para 29 Memorization Schema - server.js ke upar schemas section mein add karein
+// -----------------------------------------------------------------------------------
+// const para29MemorizationSchema = new mongoose.Schema({
+//   ayatIndex: { type: Number, required: true },
+//   ayatText: { type: String, required: true },
+//   audioPath: { type: String, required: true },
+//   recordedAt: { type: Date, default: Date.now },
+//   recorderName: { type: String, required: true },
+//   recorderGender: { type: String, enum: ["Male", "Female"], required: true },
+//   isVerified: { type: Boolean, default: false }
+// });
+// para29MemorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
+// const Para29Recording = mongoose.model('Para29Recording', para29MemorizationSchema);
+// -----------------------------------------------------------------------------------
+
+
+// ============================================================
+// ROUTE 1: Para 29 Bulk Recording - Next Group
+// GET /api/para29-bulk-recording/next
+// ============================================================
+app.get('/api/para29-bulk-recording/next', userAuth, async (req, res) => {
+  try {
+    const userName = req.user?.name;
+    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
+
+    // Para 29 ki ayats filter karein (juzNo === 29)
+    const para29Ayats = ayats.filter(ayat => ayat.juzNo === 29);
+
+    if (para29Ayats.length === 0) {
+      return res.status(404).json({ error: 'Para 29 data not found' });
+    }
+
+    // Is user ki already recorded ayats nikalo
+    const userRecordings = await Para29Recording.find(
+      { recorderName: userName },
+      'ayatIndex'
+    );
+    const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
+
+    // Un-recorded ayats
+    const unrecordedAyats = para29Ayats.filter(ayat => !recordedIndices.includes(ayat.index));
+
+    if (unrecordedAyats.length === 0) {
+      return res.json({
+        ayats: [],
+        userRecorded: recordedIndices.length,
+        totalAyats: para29Ayats.length
+      });
+    }
+
+    // Para 29 Surahs: 67-77
+    // Surah 67 Al-Mulk     - 30 ayats  -> single
+    // Surah 68 Al-Qalam    - 52 ayats  -> single
+    // Surah 69 Al-Haqqah   - 52 ayats  -> single
+    // Surah 70 Al-Ma'arij  - 44 ayats  -> single
+    // Surah 71 Nuh         - 28 ayats  -> single
+    // Surah 72 Al-Jinn     - 28 ayats  -> single
+    // Surah 73 Al-Muzzammil- 20 ayats  -> pair with 74
+    // Surah 74 Al-Muddassir- 56 ayats  -> pair with 73
+    // Surah 75 Al-Qiyamah  - 40 ayats  -> pair with 76
+    // Surah 76 Al-Insan    - 31 ayats  -> pair with 75
+    // Surah 77 Al-Mursalat - 50 ayats  -> single
+
+    const unrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
+
+    if (unrecordedSurahs.length === 0) {
+      return res.json({
+        ayats: [],
+        userRecorded: recordedIndices.length,
+        totalAyats: para29Ayats.length
+      });
+    }
+
+    let groupSurahs = [];
+    const firstSurah = unrecordedSurahs[0];
+
+    // Para 29 grouping logic:
+    // Surahs 67-72: single surah at a time (ye bari hain)
+    // Surahs 73 & 74: pair
+    // Surahs 75 & 76: pair
+    // Surah 77: single
+    if (firstSurah <= 72) {
+      // Single surah (67, 68, 69, 70, 71, 72)
+      groupSurahs = [firstSurah];
+    } else if (firstSurah === 73 || firstSurah === 74) {
+      // Pair: 73 & 74
+      groupSurahs = [73];
+      if (unrecordedSurahs.includes(74)) groupSurahs.push(74);
+    } else if (firstSurah === 75 || firstSurah === 76) {
+      // Pair: 75 & 76
+      groupSurahs = [75];
+      if (unrecordedSurahs.includes(76)) groupSurahs.push(76);
+    } else {
+      // Surah 77 - single
+      groupSurahs = [firstSurah];
+    }
+
+    const nextGroup = unrecordedAyats.filter(ayat => groupSurahs.includes(ayat.surahNo));
+    nextGroup.sort((a, b) => a.index - b.index);
+
+    const formattedAyats = nextGroup.map(ayat => ({
+      ...ayat,
+      uthmani_script: ayat.uthmani_script || '',
+      indopak_script: ayat.indopak_script || '',
+      text: ayat.uthmani_script || ayat.text || ''
+    }));
+
+    res.json({
+      ayats: formattedAyats,
+      userRecorded: recordedIndices.length,
+      totalAyats: para29Ayats.length,
+      currentSurahs: groupSurahs,
+      groupType: groupSurahs.length === 1 ? 'single' : 'pair'
+    });
+  } catch (error) {
+    console.error('Error fetching para29 bulk recording ayats:', error);
+    res.status(500).json({ error: 'Failed to fetch ayats' });
+  }
+});
+
+
+// ============================================================
+// ROUTE 2: Para 29 Memorization Save
+// POST /api/para29-memorization/save
+// ============================================================
+app.post('/api/para29-memorization/save', userAuth, upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
+
+    const { ayatIndex, ayatText } = req.body;
+    const recorderName = req.user?.name;
+    const recorderGender = req.user?.gender;
+
+    if (!recorderName || !recorderGender) {
+      return res.status(401).json({ error: 'User not logged in properly' });
+    }
+
+    const ayatIdx = parseInt(ayatIndex);
+
+    const ayat = ayats.find(a => a.index === ayatIdx);
+    if (!ayat || ayat.juzNo !== 29) {
+      return res.status(400).json({ error: 'Invalid ayat or not from Para 29' });
+    }
+
+    const ext = req.file.mimetype.includes('wav') ? 'wav'
+              : req.file.mimetype.includes('mpeg') ? 'mp3'
+              : 'webm';
+    const objectKey = `para29/${recorderName}_ayat_${ayatIdx + 1}_${Date.now()}.${ext}`;
+
+    await s3.send(new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: objectKey,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+    }));
+
+    const recording = new Para29Recording({
+      ayatIndex: ayatIdx,
+      ayatText,
+      audioPath: objectKey,
+      recorderName,
+      recorderGender
+    });
+
+    await recording.save();
+
+    res.json({
+      message: 'Para 29 recording saved successfully',
+      recording
+    });
+  } catch (err) {
+    console.error('Error saving para29 recording:', err);
+    res.status(500).json({ error: 'Failed to save recording' });
+  }
+});
+
+
+// ============================================================
+// ROUTE 3: Admin - Para 29 Recordings List
+// GET /api/admin/para29
+// ============================================================
+app.get('/api/admin/para29', adminAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 200;
+    const skip = (page - 1) * limit;
+
+    const totalRecordings = await Para29Recording.countDocuments();
+    const recordings = await Para29Recording.find({})
+      .sort({ recordedAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
+      const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+      const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
+
+      return {
+        _id: rec._id,
+        ayatIndex: rec.ayatIndex,
+        ayatText: rec.ayatText,
+        audioUrl: signedUrl,
+        audioPath: rec.audioPath,
+        recordedAt: rec.recordedAt,
+        recorderName: rec.recorderName,
+        recorderGender: rec.recorderGender,
+        isVerified: rec.isVerified
+      };
+    }));
+
+    res.json({
+      recordings: recordingsWithUrls,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalRecordings / limit),
+        totalItems: totalRecordings,
+        itemsPerPage: limit
+      }
+    });
+  } catch (err) {
+    console.error("Error fetching admin para29 recordings:", err);
+    res.status(500).json({ error: "Failed to fetch recordings" });
+  }
+});
+
+
+// ============================================================
+// ROUTE 4: Admin - Para 29 Delete Recording
+// DELETE /api/admin/para29/:id
+// ============================================================
+app.delete('/api/admin/para29/:id', adminAuth, async (req, res) => {
+  try {
+    const recordingId = req.params.id;
+    const recording = await Para29Recording.findById(recordingId);
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+
+    await s3.send(new DeleteObjectCommand({
+      Bucket: BUCKET,
+      Key: recording.audioPath
+    }));
+
+    await recording.deleteOne();
+
+    res.json({ message: 'Para 29 recording deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting para29 recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+
+// ============================================================
+// ROUTE 5: Admin - Para 29 Verify Toggle
+// PATCH /api/admin/para29/verify/:id
+// ============================================================
+app.patch('/api/admin/para29/verify/:id', adminAuth, async (req, res) => {
+  try {
+    const recordingId = req.params.id;
+    const recording = await Para29Recording.findById(recordingId);
+
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+
+    recording.isVerified = !recording.isVerified;
+    await recording.save();
+
+    res.json({
+      message: 'Verification updated successfully',
+      isVerified: recording.isVerified
+    });
+  } catch (err) {
+    console.error('Error updating para29 verification:', err);
+    res.status(500).json({ error: 'Failed to update verification' });
+  }
+});
+
+
+// ============================================================
+// ROUTE 6: Admin - Para 29 CSV Export
+// GET /api/admin/para29/export-csv
+// ============================================================
+app.get('/api/admin/para29/export-csv', adminAuth, async (req, res) => {
+  try {
+    const recordings = await Para29Recording.find({}).sort({ ayatIndex: 1, recorderName: 1 });
+
+    let csv = 'Ayat_Index,Ayat_Number,Surah_Name,Para,Recorder_Name,Gender,Audio_Filename,Recorded_Date\n';
+
+    for (const rec of recordings) {
+      const ayat = ayats.find(a => a.index === rec.ayatIndex);
+      const timestamp = new Date(rec.recordedAt).getTime();
+      const uniqueFilename = `para29_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
+
+      const row = [
+        rec.ayatIndex,
+        rec.ayatIndex + 1,
+        ayat ? `"${ayat.surahNameEn} (${ayat.surahNameAr})"` : 'Unknown',
+        ayat ? ayat.juzNo : 29,
+        `"${rec.recorderName}"`,
+        rec.recorderGender,
+        uniqueFilename,
+        new Date(rec.recordedAt).toISOString()
+      ].join(',');
+
+      csv += row + '\n';
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=para29_recordings.csv');
+    res.send(csv);
+  } catch (err) {
+    console.error('Error exporting para29 CSV:', err);
+    res.status(500).json({ error: 'Failed to export CSV' });
+  }
+});
+
+
+// ============================================================
+// ROUTE 7: Download Para 29 Audios as ZIP
+// GET /api/download-para29-audios
+// ============================================================
+app.get('/api/download-para29-audios', async (req, res) => {
+  try {
+    const start = parseInt(req.query.start);
+    const end = parseInt(req.query.end);
+
+    if (!start || !end || start < 1 || end < start) {
+      return res.status(400).json({ error: 'Invalid start/end parameters' });
+    }
+
+    console.log(`📦 Para 29 ZIP Download request: ${start} to ${end}`);
+
+    const allRecordings = await Para29Recording.find({})
+      .sort({ recorderName: 1, ayatIndex: 1 });
+
+    const recordings = allRecordings.slice(start - 1, end);
+
+    if (recordings.length === 0) {
+      return res.status(404).json({ error: 'No recordings found in this range' });
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=para29_recordings_${start}_to_${end}.zip`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    archive.on('error', (err) => {
+      console.error('❌ Archive error:', err);
+      throw err;
+    });
+
+    archive.pipe(res);
+
+    let fileCount = 0;
+    for (const rec of recordings) {
+      if (!rec.audioPath) continue;
+
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        const { Body } = await s3.send(getCmd);
+
+        const timestamp = new Date(rec.recordedAt).getTime();
+        const folderName = `${rec.recorderName}_${rec.recorderGender}`;
+        const filename = `para29_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
+        const filePath = `${folderName}/${filename}`;
+
+        archive.append(Body, { name: filePath });
+        fileCount++;
+      } catch (err) {
+        if (err.Code === "NoSuchKey" || err.name === "NoSuchKey") {
+          console.warn(`⚠️ Skipping missing file: ${rec.audioPath}`);
+          continue;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    await archive.finalize();
+    console.log('✅ Para 29 archive finalized successfully');
+
+  } catch (err) {
+    console.error('❌ Error building para29 zip:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to build zip: ' + err.message });
+    }
+  }
+});
+//=======================================================
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
