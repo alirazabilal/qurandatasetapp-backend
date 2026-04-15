@@ -101,6 +101,21 @@ para29MemorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
 const Para29Recording = mongoose.model('Para29Recording', para29MemorizationSchema);
 //=========================================================================
 
+// Flutter App Recordings Schema
+const flutterRecordingSchema = new mongoose.Schema({
+  deviceId: { type: String, required: true },
+  ayahIndex: { type: Number, required: true },
+  ayahText: { type: String, required: true },
+  surahNo: { type: Number, required: true },
+  surahName: { type: String, required: true },
+  ayahNumberInSurah: { type: Number, required: true },
+  source: { type: String, enum: ['recitation', 'memorization'], default: 'recitation' },
+  audioPath: { type: String, required: true },
+  recordedAt: { type: Date, default: Date.now },
+  isVerified: { type: Boolean, default: false }
+});
+const FlutterRecording = mongoose.model('FlutterRecording', flutterRecordingSchema);
+
 const User = mongoose.model('User', userSchema);
 const Recording = mongoose.model('Recording', recordingSchema);
 const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
@@ -1140,26 +1155,7 @@ app.get('/api/download-memorization-audios', async (req, res) => {
   }
 });
 
-//======================29th para=============================
-// ============================================================
-// PARA 29 - NEW ROUTES - server.js mein add karein
-// In routes ko existing routes ke baad, health check se pehle paste karein
-// ============================================================
-
-// Para 29 Memorization Schema - server.js ke upar schemas section mein add karein
-// -----------------------------------------------------------------------------------
-// const para29MemorizationSchema = new mongoose.Schema({
-//   ayatIndex: { type: Number, required: true },
-//   ayatText: { type: String, required: true },
-//   audioPath: { type: String, required: true },
-//   recordedAt: { type: Date, default: Date.now },
-//   recorderName: { type: String, required: true },
-//   recorderGender: { type: String, enum: ["Male", "Female"], required: true },
-//   isVerified: { type: Boolean, default: false }
-// });
-// para29MemorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
-// const Para29Recording = mongoose.model('Para29Recording', para29MemorizationSchema);
-// -----------------------------------------------------------------------------------
+//======================29th para routes========================
 
 
 // ============================================================
@@ -1342,7 +1338,6 @@ app.get('/api/admin/para29', adminAuth, async (req, res) => {
     const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
       const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
       const signedUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
-
       return {
         _id: rec._id,
         ayatIndex: rec.ayatIndex,
@@ -1378,18 +1373,10 @@ app.get('/api/admin/para29', adminAuth, async (req, res) => {
 // ============================================================
 app.delete('/api/admin/para29/:id', adminAuth, async (req, res) => {
   try {
-    const recordingId = req.params.id;
-    const recording = await Para29Recording.findById(recordingId);
+    const recording = await Para29Recording.findById(req.params.id);
+    if (!recording) return res.status(404).json({ error: 'Recording not found' });
 
-    if (!recording) {
-      return res.status(404).json({ error: 'Recording not found' });
-    }
-
-    await s3.send(new DeleteObjectCommand({
-      Bucket: BUCKET,
-      Key: recording.audioPath
-    }));
-
+    await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: recording.audioPath }));
     await recording.deleteOne();
 
     res.json({ message: 'Para 29 recording deleted successfully' });
@@ -1406,20 +1393,13 @@ app.delete('/api/admin/para29/:id', adminAuth, async (req, res) => {
 // ============================================================
 app.patch('/api/admin/para29/verify/:id', adminAuth, async (req, res) => {
   try {
-    const recordingId = req.params.id;
-    const recording = await Para29Recording.findById(recordingId);
-
-    if (!recording) {
-      return res.status(404).json({ error: 'Recording not found' });
-    }
+    const recording = await Para29Recording.findById(req.params.id);
+    if (!recording) return res.status(404).json({ error: 'Recording not found' });
 
     recording.isVerified = !recording.isVerified;
     await recording.save();
 
-    res.json({
-      message: 'Verification updated successfully',
-      isVerified: recording.isVerified
-    });
+    res.json({ message: 'Verification updated successfully', isVerified: recording.isVerified });
   } catch (err) {
     console.error('Error updating para29 verification:', err);
     res.status(500).json({ error: 'Failed to update verification' });
@@ -1479,8 +1459,6 @@ app.get('/api/download-para29-audios', async (req, res) => {
       return res.status(400).json({ error: 'Invalid start/end parameters' });
     }
 
-    console.log(`📦 Para 29 ZIP Download request: ${start} to ${end}`);
-
     const allRecordings = await Para29Recording.find({})
       .sort({ recorderName: 1, ayatIndex: 1 });
 
@@ -1494,42 +1472,25 @@ app.get('/api/download-para29-audios', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename=para29_recordings_${start}_to_${end}.zip`);
 
     const archive = archiver('zip', { zlib: { level: 9 } });
-
-    archive.on('error', (err) => {
-      console.error('❌ Archive error:', err);
-      throw err;
-    });
-
+    archive.on('error', (err) => { throw err; });
     archive.pipe(res);
 
-    let fileCount = 0;
     for (const rec of recordings) {
       if (!rec.audioPath) continue;
-
       try {
         const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
         const { Body } = await s3.send(getCmd);
-
         const timestamp = new Date(rec.recordedAt).getTime();
         const folderName = `${rec.recorderName}_${rec.recorderGender}`;
         const filename = `para29_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
-        const filePath = `${folderName}/${filename}`;
-
-        archive.append(Body, { name: filePath });
-        fileCount++;
+        archive.append(Body, { name: `${folderName}/${filename}` });
       } catch (err) {
-        if (err.Code === "NoSuchKey" || err.name === "NoSuchKey") {
-          console.warn(`⚠️ Skipping missing file: ${rec.audioPath}`);
-          continue;
-        } else {
-          throw err;
-        }
+        if (err.Code === "NoSuchKey" || err.name === "NoSuchKey") continue;
+        throw err;
       }
     }
 
     await archive.finalize();
-    console.log('✅ Para 29 archive finalized successfully');
-
   } catch (err) {
     console.error('❌ Error building para29 zip:', err);
     if (!res.headersSent) {
@@ -1537,7 +1498,216 @@ app.get('/api/download-para29-audios', async (req, res) => {
     }
   }
 });
-//=======================================================
+
+//===================== FLUTTER APP RECORDINGS =====================
+
+// POST /api/flutter-recordings/save — public endpoint (no auth), called from Flutter app
+app.post('/api/flutter-recordings/save', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
+
+    const { deviceId, ayahIndex, ayahText, surahNo, surahName, ayahNumberInSurah, source } = req.body;
+
+    if (!deviceId || !ayahText) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const ext = req.file.mimetype.includes('wav') ? 'wav'
+              : req.file.mimetype.includes('mpeg') ? 'mp3'
+              : 'webm';
+    const objectKey = `flutter_recordings/${String(deviceId).substring(0, 32)}_ayat${parseInt(ayahIndex) + 1}_${Date.now()}.${ext}`;
+
+    await s3.send(new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: objectKey,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+    }));
+
+    const recording = new FlutterRecording({
+      deviceId: String(deviceId).substring(0, 64),
+      ayahIndex: parseInt(ayahIndex) || 0,
+      ayahText: String(ayahText).substring(0, 500),
+      surahNo: parseInt(surahNo) || 0,
+      surahName: String(surahName || '').substring(0, 100),
+      ayahNumberInSurah: parseInt(ayahNumberInSurah) || 0,
+      source: ['recitation', 'memorization'].includes(source) ? source : 'recitation',
+      audioPath: objectKey
+    });
+
+    await recording.save();
+    res.json({ message: 'Recording saved', id: recording._id });
+  } catch (err) {
+    console.error('Error saving flutter recording:', err);
+    res.status(500).json({ error: 'Failed to save recording' });
+  }
+});
+
+// GET /api/admin/flutter-recordings — paginated list with signed URLs
+app.get('/api/admin/flutter-recordings', adminAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const skip = (page - 1) * limit;
+
+    const total = await FlutterRecording.countDocuments();
+    const recordings = await FlutterRecording.find({})
+      .sort({ recordedAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const recordingsWithUrls = await Promise.all(recordings.map(async (rec) => {
+      let audioUrl = null;
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        audioUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_EXPIRY });
+      } catch (_) {}
+
+      return {
+        _id: rec._id,
+        deviceId: rec.deviceId,
+        ayahIndex: rec.ayahIndex,
+        ayahText: rec.ayahText,
+        surahNo: rec.surahNo,
+        surahName: rec.surahName,
+        ayahNumberInSurah: rec.ayahNumberInSurah,
+        source: rec.source,
+        audioPath: rec.audioPath,
+        audioUrl,
+        recordedAt: rec.recordedAt,
+        isVerified: rec.isVerified
+      };
+    }));
+
+    res.json({
+      recordings: recordingsWithUrls,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(total / limit),
+        totalItems: total,
+        itemsPerPage: limit
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching flutter recordings:', err);
+    res.status(500).json({ error: 'Failed to fetch recordings' });
+  }
+});
+
+// PATCH /api/admin/flutter-recordings/verify/:id
+app.patch('/api/admin/flutter-recordings/verify/:id', adminAuth, async (req, res) => {
+  try {
+    const rec = await FlutterRecording.findById(req.params.id);
+    if (!rec) return res.status(404).json({ error: 'Recording not found' });
+
+    rec.isVerified = !rec.isVerified;
+    await rec.save();
+
+    res.json({ message: 'Verification updated', isVerified: rec.isVerified });
+  } catch (err) {
+    console.error('Error verifying flutter recording:', err);
+    res.status(500).json({ error: 'Failed to update verification' });
+  }
+});
+
+// DELETE /api/admin/flutter-recordings/:id
+app.delete('/api/admin/flutter-recordings/:id', adminAuth, async (req, res) => {
+  try {
+    const rec = await FlutterRecording.findById(req.params.id);
+    if (!rec) return res.status(404).json({ error: 'Recording not found' });
+
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rec.audioPath }));
+    } catch (_) {}
+
+    await rec.deleteOne();
+    res.json({ message: 'Recording deleted' });
+  } catch (err) {
+    console.error('Error deleting flutter recording:', err);
+    res.status(500).json({ error: 'Failed to delete recording' });
+  }
+});
+
+// GET /api/admin/flutter-recordings/export-csv?verifiedOnly=true|false
+app.get('/api/admin/flutter-recordings/export-csv', adminAuth, async (req, res) => {
+  try {
+    const verifiedOnly = req.query.verifiedOnly === 'true';
+    const query = verifiedOnly ? { isVerified: true } : {};
+    const recordings = await FlutterRecording.find(query).sort({ recordedAt: -1 });
+
+    let csv = 'ID,Device_ID,Ayah_Index,Ayah_Number,Ayah_Text,Surah_No,Surah_Name,Ayah_In_Surah,Source,Audio_Path,Recorded_Date,Verified\n';
+
+    for (const rec of recordings) {
+      const ayatText = rec.ayahText.replace(/"/g, '""');
+      const row = [
+        rec._id,
+        rec.deviceId,
+        rec.ayahIndex,
+        rec.ayahIndex + 1,
+        `"${ayatText}"`,
+        rec.surahNo,
+        `"${rec.surahName}"`,
+        rec.ayahNumberInSurah,
+        rec.source,
+        rec.audioPath,
+        new Date(rec.recordedAt).toISOString(),
+        rec.isVerified ? 'Yes' : 'No'
+      ].join(',');
+      csv += row + '\n';
+    }
+
+    const filename = verifiedOnly ? 'flutter_recordings_verified.csv' : 'flutter_recordings_all.csv';
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+    res.send(csv);
+  } catch (err) {
+    console.error('Error exporting flutter recordings CSV:', err);
+    res.status(500).json({ error: 'Failed to export CSV' });
+  }
+});
+
+// GET /api/admin/flutter-recordings/download-audios?verifiedOnly=true|false
+app.get('/api/admin/flutter-recordings/download-audios', adminAuth, async (req, res) => {
+  try {
+    const verifiedOnly = req.query.verifiedOnly === 'true';
+    const query = verifiedOnly ? { isVerified: true } : {};
+    const recordings = await FlutterRecording.find(query).sort({ recordedAt: -1 });
+
+    if (recordings.length === 0) {
+      return res.status(404).json({ error: 'No recordings found' });
+    }
+
+    const filename = verifiedOnly ? 'flutter_verified.zip' : 'flutter_all.zip';
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => { throw err; });
+    archive.pipe(res);
+
+    for (const rec of recordings) {
+      if (!rec.audioPath) continue;
+      try {
+        const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: rec.audioPath });
+        const { Body } = await s3.send(getCmd);
+        const ext = rec.audioPath.split('.').pop() || 'wav';
+        const fname = `surah${rec.surahNo}_ayat${rec.ayahNumberInSurah}_${rec.source}_${rec._id}.${ext}`;
+        archive.append(Body, { name: fname });
+      } catch (err) {
+        if (err.Code === 'NoSuchKey' || err.name === 'NoSuchKey') continue;
+        throw err;
+      }
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    console.error('Error building flutter recordings zip:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to build zip' });
+    }
+  }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
