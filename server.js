@@ -87,8 +87,7 @@ const memorizationSchema = new mongoose.Schema({
 
 memorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
 
-//===============29th para Schema========================
-const para29MemorizationSchema = new mongoose.Schema({
+const para29RecordingSchema = new mongoose.Schema({
   ayatIndex: { type: Number, required: true },
   ayatText: { type: String, required: true },
   audioPath: { type: String, required: true },
@@ -97,28 +96,12 @@ const para29MemorizationSchema = new mongoose.Schema({
   recorderGender: { type: String, enum: ["Male", "Female"], required: true },
   isVerified: { type: Boolean, default: false }
 });
-para29MemorizationSchema.index({ ayatIndex: 1, recorderName: 1 });
-const Para29Recording = mongoose.model('Para29Recording', para29MemorizationSchema);
-//=========================================================================
-
-// Flutter App Recordings Schema
-const flutterRecordingSchema = new mongoose.Schema({
-  deviceId: { type: String, required: true },
-  ayahIndex: { type: Number, required: true },
-  ayahText: { type: String, required: true },
-  surahNo: { type: Number, required: true },
-  surahName: { type: String, required: true },
-  ayahNumberInSurah: { type: Number, required: true },
-  source: { type: String, enum: ['recitation', 'memorization'], default: 'recitation' },
-  audioPath: { type: String, required: true },
-  recordedAt: { type: Date, default: Date.now },
-  isVerified: { type: Boolean, default: false }
-});
-const FlutterRecording = mongoose.model('FlutterRecording', flutterRecordingSchema);
+para29RecordingSchema.index({ ayatIndex: 1, recorderName: 1 });
 
 const User = mongoose.model('User', userSchema);
 const Recording = mongoose.model('Recording', recordingSchema);
 const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
+const Para29Recording = mongoose.model('Para29Recording', para29RecordingSchema);
 
 // Multer
 const upload = multer({
@@ -759,6 +742,108 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
   }
 });
 
+// ===================== PARA 29 BULK RECORDING (user) =====================
+
+// GET /api/para29-bulk/next — returns all ayats of the next unrecorded surah (1 surah per page)
+app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
+  try {
+    const userName = req.user?.name;
+    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
+
+    const para29Ayats = ayats.filter(ayat => ayat.juzNo === 29);
+    if (para29Ayats.length === 0) {
+      return res.status(404).json({ error: 'Para 29 data not found' });
+    }
+
+    const userRecordings = await Para29Recording.find({ recorderName: userName }, 'ayatIndex');
+    const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
+
+    const unrecordedAyats = para29Ayats.filter(ayat => !recordedIndices.includes(ayat.index));
+
+    if (unrecordedAyats.length === 0) {
+      return res.json({
+        ayats: [],
+        userRecorded: recordedIndices.length,
+        totalAyats: para29Ayats.length,
+        currentSurah: null
+      });
+    }
+
+    // Pick the first unrecorded surah and return all its ayats
+    const unrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
+    const nextSurah = unrecordedSurahs[0];
+    const surahAyats = para29Ayats.filter(a => a.surahNo === nextSurah);
+    surahAyats.sort((a, b) => a.index - b.index);
+
+    const formattedAyats = surahAyats.map(ayat => ({
+      ...ayat,
+      uthmani_script: ayat.uthmani_script || '',
+      indopak_script: ayat.indopak_script || '',
+      text: ayat.uthmani_script || ayat.text || ''
+    }));
+
+    res.json({
+      ayats: formattedAyats,
+      userRecorded: recordedIndices.length,
+      totalAyats: para29Ayats.length,
+      currentSurah: nextSurah,
+      surahNameEn: surahAyats[0]?.surahNameEn || '',
+      surahNameAr: surahAyats[0]?.surahNameAr || ''
+    });
+  } catch (error) {
+    console.error('Error fetching para29 bulk recording ayats:', error);
+    res.status(500).json({ error: 'Failed to fetch ayats' });
+  }
+});
+
+// POST /api/para29-bulk/save — save a single recording
+app.post('/api/para29-bulk/save', userAuth, upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
+
+    const { ayatIndex, ayatText } = req.body;
+    const recorderName = req.user?.name;
+    const recorderGender = req.user?.gender;
+
+    if (!recorderName || !recorderGender) {
+      return res.status(401).json({ error: 'User not logged in properly' });
+    }
+
+    const ayatIdx = parseInt(ayatIndex);
+    const ayat = ayats.find(a => a.index === ayatIdx);
+    if (!ayat || ayat.juzNo !== 29) {
+      return res.status(400).json({ error: 'Invalid ayat or not from Para 29' });
+    }
+
+    const ext = req.file.mimetype.includes('wav') ? 'wav'
+              : req.file.mimetype.includes('mpeg') ? 'mp3'
+              : 'webm';
+    const objectKey = `para29/${recorderName}_ayat_${ayatIdx + 1}_${Date.now()}.${ext}`;
+
+    await s3.send(new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: objectKey,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+    }));
+
+    const recording = new Para29Recording({
+      ayatIndex: ayatIdx,
+      ayatText,
+      audioPath: objectKey,
+      recorderName,
+      recorderGender
+    });
+
+    await recording.save();
+
+    res.json({ message: 'Recording saved successfully', recording });
+  } catch (err) {
+    console.error('Error saving para29 recording:', err);
+    res.status(500).json({ error: 'Failed to save recording' });
+  }
+});
+
 // Admin routes
 app.post('/api/admin/login', (req, res) => {
   const { password } = req.body;
@@ -1155,181 +1240,15 @@ app.get('/api/download-memorization-audios', async (req, res) => {
   }
 });
 
-//======================29th para routes========================
+// ===================== PARA 29 ADMIN ROUTES =====================
 
-
-// ============================================================
-// ROUTE 1: Para 29 Bulk Recording - Next Group
-// GET /api/para29-bulk-recording/next
-// ============================================================
-app.get('/api/para29-bulk-recording/next', userAuth, async (req, res) => {
-  try {
-    const userName = req.user?.name;
-    if (!userName) return res.status(401).json({ error: 'User not authenticated' });
-
-    // Para 29 ki ayats filter karein (juzNo === 29)
-    const para29Ayats = ayats.filter(ayat => ayat.juzNo === 29);
-
-    if (para29Ayats.length === 0) {
-      return res.status(404).json({ error: 'Para 29 data not found' });
-    }
-
-    // Is user ki already recorded ayats nikalo
-    const userRecordings = await Para29Recording.find(
-      { recorderName: userName },
-      'ayatIndex'
-    );
-    const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
-
-    // Un-recorded ayats
-    const unrecordedAyats = para29Ayats.filter(ayat => !recordedIndices.includes(ayat.index));
-
-    if (unrecordedAyats.length === 0) {
-      return res.json({
-        ayats: [],
-        userRecorded: recordedIndices.length,
-        totalAyats: para29Ayats.length
-      });
-    }
-
-    // Para 29 Surahs: 67-77
-    // Surah 67 Al-Mulk     - 30 ayats  -> single
-    // Surah 68 Al-Qalam    - 52 ayats  -> single
-    // Surah 69 Al-Haqqah   - 52 ayats  -> single
-    // Surah 70 Al-Ma'arij  - 44 ayats  -> single
-    // Surah 71 Nuh         - 28 ayats  -> single
-    // Surah 72 Al-Jinn     - 28 ayats  -> single
-    // Surah 73 Al-Muzzammil- 20 ayats  -> pair with 74
-    // Surah 74 Al-Muddassir- 56 ayats  -> pair with 73
-    // Surah 75 Al-Qiyamah  - 40 ayats  -> pair with 76
-    // Surah 76 Al-Insan    - 31 ayats  -> pair with 75
-    // Surah 77 Al-Mursalat - 50 ayats  -> single
-
-    const unrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
-
-    if (unrecordedSurahs.length === 0) {
-      return res.json({
-        ayats: [],
-        userRecorded: recordedIndices.length,
-        totalAyats: para29Ayats.length
-      });
-    }
-
-    let groupSurahs = [];
-    const firstSurah = unrecordedSurahs[0];
-
-    // Para 29 grouping logic:
-    // Surahs 67-72: single surah at a time (ye bari hain)
-    // Surahs 73 & 74: pair
-    // Surahs 75 & 76: pair
-    // Surah 77: single
-    if (firstSurah <= 72) {
-      // Single surah (67, 68, 69, 70, 71, 72)
-      groupSurahs = [firstSurah];
-    } else if (firstSurah === 73 || firstSurah === 74) {
-      // Pair: 73 & 74
-      groupSurahs = [73];
-      if (unrecordedSurahs.includes(74)) groupSurahs.push(74);
-    } else if (firstSurah === 75 || firstSurah === 76) {
-      // Pair: 75 & 76
-      groupSurahs = [75];
-      if (unrecordedSurahs.includes(76)) groupSurahs.push(76);
-    } else {
-      // Surah 77 - single
-      groupSurahs = [firstSurah];
-    }
-
-    const nextGroup = unrecordedAyats.filter(ayat => groupSurahs.includes(ayat.surahNo));
-    nextGroup.sort((a, b) => a.index - b.index);
-
-    const formattedAyats = nextGroup.map(ayat => ({
-      ...ayat,
-      uthmani_script: ayat.uthmani_script || '',
-      indopak_script: ayat.indopak_script || '',
-      text: ayat.uthmani_script || ayat.text || ''
-    }));
-
-    res.json({
-      ayats: formattedAyats,
-      userRecorded: recordedIndices.length,
-      totalAyats: para29Ayats.length,
-      currentSurahs: groupSurahs,
-      groupType: groupSurahs.length === 1 ? 'single' : 'pair'
-    });
-  } catch (error) {
-    console.error('Error fetching para29 bulk recording ayats:', error);
-    res.status(500).json({ error: 'Failed to fetch ayats' });
-  }
-});
-
-
-// ============================================================
-// ROUTE 2: Para 29 Memorization Save
-// POST /api/para29-memorization/save
-// ============================================================
-app.post('/api/para29-memorization/save', userAuth, upload.single('audio'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
-
-    const { ayatIndex, ayatText } = req.body;
-    const recorderName = req.user?.name;
-    const recorderGender = req.user?.gender;
-
-    if (!recorderName || !recorderGender) {
-      return res.status(401).json({ error: 'User not logged in properly' });
-    }
-
-    const ayatIdx = parseInt(ayatIndex);
-
-    const ayat = ayats.find(a => a.index === ayatIdx);
-    if (!ayat || ayat.juzNo !== 29) {
-      return res.status(400).json({ error: 'Invalid ayat or not from Para 29' });
-    }
-
-    const ext = req.file.mimetype.includes('wav') ? 'wav'
-              : req.file.mimetype.includes('mpeg') ? 'mp3'
-              : 'webm';
-    const objectKey = `para29/${recorderName}_ayat_${ayatIdx + 1}_${Date.now()}.${ext}`;
-
-    await s3.send(new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: objectKey,
-      Body: req.file.buffer,
-      ContentType: req.file.mimetype,
-    }));
-
-    const recording = new Para29Recording({
-      ayatIndex: ayatIdx,
-      ayatText,
-      audioPath: objectKey,
-      recorderName,
-      recorderGender
-    });
-
-    await recording.save();
-
-    res.json({
-      message: 'Para 29 recording saved successfully',
-      recording
-    });
-  } catch (err) {
-    console.error('Error saving para29 recording:', err);
-    res.status(500).json({ error: 'Failed to save recording' });
-  }
-});
-
-
-// ============================================================
-// ROUTE 3: Admin - Para 29 Recordings List
-// GET /api/admin/para29
-// ============================================================
 app.get('/api/admin/para29', adminAuth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 200;
     const skip = (page - 1) * limit;
 
-    const totalRecordings = await Para29Recording.countDocuments();
+    const total = await Para29Recording.countDocuments();
     const recordings = await Para29Recording.find({})
       .sort({ recordedAt: -1 })
       .skip(skip)
@@ -1355,22 +1274,17 @@ app.get('/api/admin/para29', adminAuth, async (req, res) => {
       recordings: recordingsWithUrls,
       pagination: {
         currentPage: page,
-        totalPages: Math.ceil(totalRecordings / limit),
-        totalItems: totalRecordings,
+        totalPages: Math.ceil(total / limit),
+        totalItems: total,
         itemsPerPage: limit
       }
     });
   } catch (err) {
-    console.error("Error fetching admin para29 recordings:", err);
-    res.status(500).json({ error: "Failed to fetch recordings" });
+    console.error('Error fetching admin para29 recordings:', err);
+    res.status(500).json({ error: 'Failed to fetch recordings' });
   }
 });
 
-
-// ============================================================
-// ROUTE 4: Admin - Para 29 Delete Recording
-// DELETE /api/admin/para29/:id
-// ============================================================
 app.delete('/api/admin/para29/:id', adminAuth, async (req, res) => {
   try {
     const recording = await Para29Recording.findById(req.params.id);
@@ -1379,18 +1293,13 @@ app.delete('/api/admin/para29/:id', adminAuth, async (req, res) => {
     await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: recording.audioPath }));
     await recording.deleteOne();
 
-    res.json({ message: 'Para 29 recording deleted successfully' });
+    res.json({ message: 'Recording deleted successfully' });
   } catch (err) {
     console.error('Error deleting para29 recording:', err);
     res.status(500).json({ error: 'Failed to delete recording' });
   }
 });
 
-
-// ============================================================
-// ROUTE 5: Admin - Para 29 Verify Toggle
-// PATCH /api/admin/para29/verify/:id
-// ============================================================
 app.patch('/api/admin/para29/verify/:id', adminAuth, async (req, res) => {
   try {
     const recording = await Para29Recording.findById(req.params.id);
@@ -1399,18 +1308,13 @@ app.patch('/api/admin/para29/verify/:id', adminAuth, async (req, res) => {
     recording.isVerified = !recording.isVerified;
     await recording.save();
 
-    res.json({ message: 'Verification updated successfully', isVerified: recording.isVerified });
+    res.json({ message: 'Verification updated', isVerified: recording.isVerified });
   } catch (err) {
-    console.error('Error updating para29 verification:', err);
+    console.error('Error verifying para29 recording:', err);
     res.status(500).json({ error: 'Failed to update verification' });
   }
 });
 
-
-// ============================================================
-// ROUTE 6: Admin - Para 29 CSV Export
-// GET /api/admin/para29/export-csv
-// ============================================================
 app.get('/api/admin/para29/export-csv', adminAuth, async (req, res) => {
   try {
     const recordings = await Para29Recording.find({}).sort({ ayatIndex: 1, recorderName: 1 });
@@ -1445,11 +1349,6 @@ app.get('/api/admin/para29/export-csv', adminAuth, async (req, res) => {
   }
 });
 
-
-// ============================================================
-// ROUTE 7: Download Para 29 Audios as ZIP
-// GET /api/download-para29-audios
-// ============================================================
 app.get('/api/download-para29-audios', async (req, res) => {
   try {
     const start = parseInt(req.query.start);
@@ -1459,9 +1358,7 @@ app.get('/api/download-para29-audios', async (req, res) => {
       return res.status(400).json({ error: 'Invalid start/end parameters' });
     }
 
-    const allRecordings = await Para29Recording.find({})
-      .sort({ recorderName: 1, ayatIndex: 1 });
-
+    const allRecordings = await Para29Recording.find({}).sort({ recorderName: 1, ayatIndex: 1 });
     const recordings = allRecordings.slice(start - 1, end);
 
     if (recordings.length === 0) {
@@ -1475,6 +1372,7 @@ app.get('/api/download-para29-audios', async (req, res) => {
     archive.on('error', (err) => { throw err; });
     archive.pipe(res);
 
+    let fileCount = 0;
     for (const rec of recordings) {
       if (!rec.audioPath) continue;
       try {
@@ -1484,22 +1382,39 @@ app.get('/api/download-para29-audios', async (req, res) => {
         const folderName = `${rec.recorderName}_${rec.recorderGender}`;
         const filename = `para29_ayat${rec.ayatIndex + 1}_${rec.recorderName}_${rec.recorderGender}_${timestamp}.webm`;
         archive.append(Body, { name: `${folderName}/${filename}` });
+        fileCount++;
       } catch (err) {
-        if (err.Code === "NoSuchKey" || err.name === "NoSuchKey") continue;
+        if (err.Code === 'NoSuchKey' || err.name === 'NoSuchKey') continue;
         throw err;
       }
     }
 
     await archive.finalize();
   } catch (err) {
-    console.error('❌ Error building para29 zip:', err);
+    console.error('Error building para29 zip:', err);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Failed to build zip: ' + err.message });
     }
   }
 });
 
-//===================== FLUTTER APP RECORDINGS =====================
+// ===================== FLUTTER APP RECORDINGS =====================
+// Schema for recordings submitted by Flutter app users who opted into data sharing
+
+const flutterRecordingSchema = new mongoose.Schema({
+  deviceId: { type: String, required: true },
+  ayahIndex: { type: Number, required: true },
+  ayahText: { type: String, required: true },
+  surahNo: { type: Number, required: true },
+  surahName: { type: String, required: true },
+  ayahNumberInSurah: { type: Number, required: true },
+  source: { type: String, enum: ['recitation', 'memorization'], default: 'recitation' },
+  audioPath: { type: String, required: true },
+  recordedAt: { type: Date, default: Date.now },
+  isVerified: { type: Boolean, default: false }
+});
+
+const FlutterRecording = mongoose.model('FlutterRecording', flutterRecordingSchema);
 
 // POST /api/flutter-recordings/save — public endpoint (no auth), called from Flutter app
 app.post('/api/flutter-recordings/save', upload.single('audio'), async (req, res) => {
