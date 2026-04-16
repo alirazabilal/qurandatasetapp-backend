@@ -1398,6 +1398,130 @@ app.get('/api/download-para29-audios', async (req, res) => {
   }
 });
 
+// ===================== PARA 29 DAILY STATS =====================
+
+// GET /api/admin/para29/daily-stats?date=YYYY-MM-DD  (default = today)
+app.get('/api/admin/para29/daily-stats', adminAuth, async (req, res) => {
+  try {
+    // Use provided date or today (Pakistan Standard Time UTC+5)
+    let targetDate;
+    if (req.query.date) {
+      targetDate = new Date(req.query.date);
+    } else {
+      targetDate = new Date();
+    }
+
+    // Start and end of the target day (UTC midnight boundaries)
+    const startOfDay = new Date(targetDate);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setUTCHours(23, 59, 59, 999);
+
+    // Aggregate recordings grouped by recorderName for the target day
+    const stats = await Para29Recording.aggregate([
+      {
+        $match: {
+          recordedAt: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: { name: '$recorderName', gender: '$recorderGender' },
+          count: { $sum: 1 },
+          lastRecordedAt: { $max: '$recordedAt' }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          recorderName: '$_id.name',
+          recorderGender: '$_id.gender',
+          count: 1,
+          lastRecordedAt: 1
+        }
+      },
+      { $sort: { count: -1, recorderName: 1 } }
+    ]);
+
+    const totalToday = stats.reduce((sum, s) => sum + s.count, 0);
+
+    res.json({
+      date: targetDate.toISOString().split('T')[0],
+      totalRecordingsToday: totalToday,
+      userStats: stats
+    });
+  } catch (err) {
+    console.error('Error fetching para29 daily stats:', err);
+    res.status(500).json({ error: 'Failed to fetch daily stats' });
+  }
+});
+
+// GET /api/admin/para29/daily-stats/export-csv?date=YYYY-MM-DD
+app.get('/api/admin/para29/daily-stats/export-csv', adminAuth, async (req, res) => {
+  try {
+    let targetDate;
+    if (req.query.date) {
+      targetDate = new Date(req.query.date);
+    } else {
+      targetDate = new Date();
+    }
+
+    const startOfDay = new Date(targetDate);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setUTCHours(23, 59, 59, 999);
+
+    const stats = await Para29Recording.aggregate([
+      {
+        $match: {
+          recordedAt: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: { name: '$recorderName', gender: '$recorderGender' },
+          count: { $sum: 1 },
+          lastRecordedAt: { $max: '$recordedAt' }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          recorderName: '$_id.name',
+          recorderGender: '$_id.gender',
+          count: 1,
+          lastRecordedAt: 1
+        }
+      },
+      { $sort: { count: -1, recorderName: 1 } }
+    ]);
+
+    const dateStr = targetDate.toISOString().split('T')[0];
+    const totalToday = stats.reduce((sum, s) => sum + s.count, 0);
+
+    let csv = `Para 29 Daily Recording Stats - ${dateStr}\n`;
+    csv += `Total Recordings Today,${totalToday}\n\n`;
+    csv += 'Rank,Recorder_Name,Gender,Recordings_Today,Last_Recorded_At\n';
+
+    stats.forEach((s, i) => {
+      csv += [
+        i + 1,
+        `"${s.recorderName}"`,
+        s.recorderGender,
+        s.count,
+        new Date(s.lastRecordedAt).toISOString()
+      ].join(',') + '\n';
+    });
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=para29_daily_stats_${dateStr}.csv`);
+    res.send(csv);
+  } catch (err) {
+    console.error('Error exporting para29 daily stats CSV:', err);
+    res.status(500).json({ error: 'Failed to export daily stats CSV' });
+  }
+});
+
 // ===================== FLUTTER APP RECORDINGS =====================
 // Schema for recordings submitted by Flutter app users who opted into data sharing
 
