@@ -845,31 +845,45 @@ app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
   }
 });
 
-// POST /api/para29-bulk/skip — ayat ko skip karo
-app.post('/api/para29-bulk/skip', userAuth, async (req, res) => {
+// POST /api/para29-bulk/skip-surah — poori surah ki unrecorded ayats skip karo
+// Frontend "Move to Next Surah" button yahi call karta hai
+app.post('/api/para29-bulk/skip-surah', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
-    const { ayatIndex } = req.body;
+    const { surahNo } = req.body;
     if (!userName) return res.status(401).json({ error: 'Not authenticated' });
-    if (ayatIndex === undefined) return res.status(400).json({ error: 'ayatIndex required' });
+    if (!surahNo) return res.status(400).json({ error: 'surahNo required' });
 
-    const idx = parseInt(ayatIndex);
-    const ayat = ayats.find(a => a.index === idx);
-    if (!ayat || ayat.juzNo !== 29) {
-      return res.status(400).json({ error: 'Invalid ayat or not from Para 29' });
+    const para29Ayats = ayats.filter(a => a.juzNo === 29 && a.surahNo === parseInt(surahNo));
+    if (para29Ayats.length === 0) {
+      return res.status(400).json({ error: 'Surah not found in Para 29' });
     }
 
-    // Upsert — agar already skipped hai to dobara insert na karo
-    await Para29Skipped.updateOne(
-      { ayatIndex: idx, recorderName: userName },
-      { $set: { ayatIndex: idx, recorderName: userName, skippedAt: new Date() } },
-      { upsert: true }
-    );
+    // Us user ki already recorded ayats nikalo
+    const userRecordings = await Para29Recording.find({ recorderName: userName }, 'ayatIndex');
+    const recordedIndices = new Set(userRecordings.map(r => r.ayatIndex));
 
-    res.json({ message: 'Ayat skipped successfully', ayatIndex: idx });
+    // Sirf unrecorded ayats skip karo
+    const toSkip = para29Ayats.filter(a => !recordedIndices.has(a.index));
+
+    if (toSkip.length === 0) {
+      return res.json({ message: 'All ayats already recorded', skipped: 0 });
+    }
+
+    // Bulk upsert
+    const ops = toSkip.map(a => ({
+      updateOne: {
+        filter: { ayatIndex: a.index, recorderName: userName },
+        update: { $set: { ayatIndex: a.index, recorderName: userName, skippedAt: new Date() } },
+        upsert: true
+      }
+    }));
+    await Para29Skipped.bulkWrite(ops);
+
+    res.json({ message: 'Surah skipped', skipped: toSkip.length, surahNo });
   } catch (err) {
-    console.error('Error skipping ayat:', err);
-    res.status(500).json({ error: 'Failed to skip ayat' });
+    console.error('Error skipping surah:', err);
+    res.status(500).json({ error: 'Failed to skip surah' });
   }
 });
 
