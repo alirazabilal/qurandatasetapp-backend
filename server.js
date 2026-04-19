@@ -1565,6 +1565,53 @@ app.get('/api/admin/para29/daily-stats/export-csv', adminAuth, async (req, res) 
   }
 });
 
+// GET /api/admin/para29/overall-progress — har user ki total recordings
+app.get('/api/admin/para29/overall-progress', adminAuth, async (req, res) => {
+  try {
+    const para29Total = ayats.filter(a => a.juzNo === 29).length;
+
+    const stats = await Para29Recording.aggregate([
+      {
+        $group: {
+          _id: { recorderName: '$recorderName', recorderGender: '$recorderGender' },
+          totalCount: { $sum: 1 },
+          uniqueAyats: { $addToSet: '$ayatIndex' },
+          lastRecordedAt: { $max: '$recordedAt' }
+        }
+      },
+      {
+        $project: {
+          recorderName: '$_id.recorderName',
+          recorderGender: '$_id.recorderGender',
+          totalCount: 1,
+          uniqueAyatCount: { $size: '$uniqueAyats' },
+          lastRecordedAt: 1
+        }
+      },
+      { $sort: { uniqueAyatCount: -1 } }
+    ]);
+
+    const userStats = stats.map(s => ({
+      recorderName: s.recorderName,
+      recorderGender: s.recorderGender,
+      totalRecordings: s.totalCount,
+      uniqueAyats: s.uniqueAyatCount,
+      para29Total,
+      completionPercent: ((s.uniqueAyatCount / para29Total) * 100).toFixed(1),
+      lastRecordedAt: s.lastRecordedAt
+    }));
+
+    res.json({
+      userStats,
+      para29Total,
+      grandTotal: userStats.reduce((sum, u) => sum + u.totalRecordings, 0)
+    });
+  } catch (err) {
+    console.error('Error fetching para29 overall progress:', err);
+    res.status(500).json({ error: 'Failed to fetch overall progress' });
+  }
+});
+
 // ===================== FLUTTER APP RECORDINGS =====================
 // Schema for recordings submitted by Flutter app users who opted into data sharing
 
