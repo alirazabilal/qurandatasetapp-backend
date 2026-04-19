@@ -103,14 +103,14 @@ const Recording = mongoose.model('Recording', recordingSchema);
 const MemorizationRecording = mongoose.model('MemorizationRecording', memorizationSchema);
 const Para29Recording = mongoose.model('Para29Recording', para29RecordingSchema);
 
-// Schema: skipped ayats per user (shown first on next login)
-const para29SkippedSchema = new mongoose.Schema({
-  ayatIndex: { type: Number, required: true },
+// Track which surahs user has skipped (Move to Next Surah)
+const para29SkippedSurahSchema = new mongoose.Schema({
   recorderName: { type: String, required: true },
+  surahNo: { type: Number, required: true },
   skippedAt: { type: Date, default: Date.now }
 });
-para29SkippedSchema.index({ ayatIndex: 1, recorderName: 1 }, { unique: true });
-const Para29Skipped = mongoose.model('Para29Skipped', para29SkippedSchema);
+para29SkippedSurahSchema.index({ recorderName: 1, surahNo: 1 }, { unique: true });
+const Para29SkippedSurah = mongoose.model('Para29SkippedSurah', para29SkippedSurahSchema);
 
 // Multer
 const upload = multer({
@@ -753,60 +753,53 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
 
 // ===================== PARA 29 BULK RECORDING (user) =====================
 
-// GET /api/para29-bulk/next
-// Logic:
-// - Recorded ayats skip, skipped surahs skip
-// - Pehle non-skipped surahs, phir skipped surahs (taake skipped end mein aayein)
-// - Sirf unrecorded ayats show hoti hain (delete ke baad sirf wo ayat wapas aati hai)
+// GET /api/para29-bulk/next?skipSurahs=67,68
+// skipSurahs = comma separated surahNos to skip (frontend manages this in sessionStorage)
+// Admin deleted ayats = unrecorded = always show first (no skip logic affects them)
 app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
     if (!userName) return res.status(401).json({ error: 'User not authenticated' });
+
+    // Frontend sends currently skipped surahs as query param
+    const skipSurahsParam = req.query.skipSurahs || '';
+    const clientSkippedSurahs = skipSurahsParam
+      ? skipSurahsParam.split(',').map(Number).filter(Boolean)
+      : [];
+    const skippedSurahSet = new Set(clientSkippedSurahs);
 
     const para29Ayats = ayats.filter(ayat => ayat.juzNo === 29);
     if (para29Ayats.length === 0) {
       return res.status(404).json({ error: 'Para 29 data not found' });
     }
 
-    // Recorded aur skipped fetch karo
-    const [userRecordings, skippedDocs] = await Promise.all([
-      Para29Recording.find({ recorderName: userName }, 'ayatIndex'),
-      Para29Skipped.find({ recorderName: userName }, 'ayatIndex')
-    ]);
-
+    // Recorded ayats fetch karo
+    const userRecordings = await Para29Recording.find({ recorderName: userName }, 'ayatIndex');
     const recordedSet = new Set(userRecordings.map(r => r.ayatIndex));
-    const skippedSurahSet = new Set(skippedDocs.map(s => {
-      const ayat = para29Ayats.find(a => a.index === s.ayatIndex);
-      return ayat ? ayat.surahNo : null;
-    }).filter(Boolean));
 
-    // Saari unrecorded ayats (recorded nahi)
+    // Saari unrecorded ayats — ye hamesha correct hai
     const unrecordedAyats = para29Ayats.filter(a => !recordedSet.has(a.index));
 
     if (unrecordedAyats.length === 0) {
       return res.json({
-        ayats: [],
-        userRecorded: recordedSet.size,
-        totalAyats: para29Ayats.length,
-        currentSurah: null
+        ayats: [], userRecorded: recordedSet.size,
+        totalAyats: para29Ayats.length, currentSurah: null
       });
     }
 
-    // Surahs jo unrecorded ayats rakhti hain
+    // Unrecorded surahs sort karo
     const allUnrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
 
-    // Pehle non-skipped surahs, phir skipped
-    const nonSkippedSurahs = allUnrecordedSurahs.filter(s => !skippedSurahSet.has(s));
-    const skippedUnrecordedSurahs = allUnrecordedSurahs.filter(s => skippedSurahSet.has(s));
+    // Non-skipped pehle, skipped baad mein
+    const nonSkipped = allUnrecordedSurahs.filter(s => !skippedSurahSet.has(s));
+    const skippedRemaining = allUnrecordedSurahs.filter(s => skippedSurahSet.has(s));
 
-    let targetSurah;
-    let isSkippedGroup = false;
-
-    if (nonSkippedSurahs.length > 0) {
-      targetSurah = nonSkippedSurahs[0];
+    let targetSurah, isSkippedGroup = false;
+    if (nonSkipped.length > 0) {
+      targetSurah = nonSkipped[0];
     } else {
-      // Sab non-skipped record ho gayi — ab skipped dikhao (loop complete)
-      targetSurah = skippedUnrecordedSurahs[0];
+      // Sab non-skipped complete — skipped wali dikhao
+      targetSurah = skippedRemaining[0];
       isSkippedGroup = true;
     }
 
@@ -820,7 +813,7 @@ app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
       uthmani_script: ayat.uthmani_script || '',
       indopak_script: ayat.indopak_script || '',
       text: ayat.uthmani_script || ayat.text || '',
-      isSkipped: skippedSurahSet.has(ayat.surahNo)
+      isSkipped: isSkippedGroup
     }));
 
     res.json({
@@ -831,54 +824,12 @@ app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
       surahNameEn: groupAyats[0]?.surahNameEn || '',
       surahNameAr: groupAyats[0]?.surahNameAr || '',
       hasSkipped: isSkippedGroup,
-      skippedCount: skippedUnrecordedSurahs.length
+      skippedCount: skippedRemaining.length,
+      allSkippedSurahs: [...skippedSurahSet]
     });
   } catch (error) {
-    console.error('Error fetching para29 bulk recording ayats:', error);
+    console.error('Error fetching para29 bulk next:', error);
     res.status(500).json({ error: 'Failed to fetch ayats' });
-  }
-});
-
-// POST /api/para29-bulk/skip-surah — surah ko skip karo (end mein aayegi)
-app.post('/api/para29-bulk/skip-surah', userAuth, async (req, res) => {
-  try {
-    const userName = req.user?.name;
-    const { surahNo } = req.body;
-    if (!userName) return res.status(401).json({ error: 'Not authenticated' });
-    if (!surahNo) return res.status(400).json({ error: 'surahNo required' });
-
-    const surahNum = parseInt(surahNo);
-    const para29Ayats = ayats.filter(a => a.juzNo === 29 && a.surahNo === surahNum);
-    if (para29Ayats.length === 0) {
-      return res.status(400).json({ error: 'Surah not found in Para 29' });
-    }
-
-    // Us surah ki saari ayats ko skipped mark karo (upsert)
-    const ops = para29Ayats.map(a => ({
-      updateOne: {
-        filter: { ayatIndex: a.index, recorderName: userName },
-        update: { $set: { ayatIndex: a.index, recorderName: userName, skippedAt: new Date() } },
-        upsert: true
-      }
-    }));
-    await Para29Skipped.bulkWrite(ops);
-
-    res.json({ message: 'Surah skipped', surahNo: surahNum });
-  } catch (err) {
-    console.error('Error skipping surah:', err);
-    res.status(500).json({ error: 'Failed to skip surah' });
-  }
-});
-
-// DELETE /api/para29-bulk/skip/:ayatIndex — skip remove karo (jab record ho jaye)
-app.delete('/api/para29-bulk/skip/:ayatIndex', userAuth, async (req, res) => {
-  try {
-    const userName = req.user?.name;
-    const idx = parseInt(req.params.ayatIndex);
-    await Para29Skipped.deleteOne({ ayatIndex: idx, recorderName: userName });
-    res.json({ message: 'Skip removed' });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to remove skip' });
   }
 });
 
@@ -914,17 +865,20 @@ app.post('/api/para29-bulk/save', userAuth, upload.single('audio'), async (req, 
     }));
 
     const recording = new Para29Recording({
-      ayatIndex: ayatIdx,
-      ayatText,
-      audioPath: objectKey,
-      recorderName,
-      recorderGender
+      ayatIndex: ayatIdx, ayatText, audioPath: objectKey,
+      recorderName, recorderGender
     });
-
     await recording.save();
 
-    // Agar ye ayat pehle skip ki thi to skip entry remove karo
-    await Para29Skipped.deleteOne({ ayatIndex: ayatIdx, recorderName });
+    // Agar is surah ki saari ayats record ho gayi hain to skip entry remove karo
+    const surahAyats = ayats.filter(a => a.juzNo === 29 && a.surahNo === ayat.surahNo);
+    const surahRecorded = await Para29Recording.find(
+      { recorderName, ayatIndex: { $in: surahAyats.map(a => a.index) } },
+      'ayatIndex'
+    );
+    if (surahRecorded.length >= surahAyats.length) {
+      await Para29SkippedSurah.deleteOne({ recorderName, surahNo: ayat.surahNo });
+    }
 
     res.json({ message: 'Recording saved successfully', recording });
   } catch (err) {
