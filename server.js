@@ -755,9 +755,9 @@ app.get('/api/bulk-recording/next', userAuth, async (req, res) => {
 
 // GET /api/para29-bulk/next
 // Logic:
-// 1. Pehle skipped ayats check karo — agar hain to unki surah show karo (sirf unrecorded wali)
-// 2. Agar koi skipped nahi to pehli unrecorded surah show karo (sirf unrecorded ayats)
-// 3. Delete ke baad sirf wo ayat wapas aati hai, poori surah nahi
+// - Recorded ayats skip, skipped surahs skip
+// - Pehle non-skipped surahs, phir skipped surahs (taake skipped end mein aayein)
+// - Sirf unrecorded ayats show hoti hain (delete ke baad sirf wo ayat wapas aati hai)
 app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
@@ -768,76 +768,70 @@ app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
       return res.status(404).json({ error: 'Para 29 data not found' });
     }
 
-    // Recorded aur skipped indices fetch karo
+    // Recorded aur skipped fetch karo
     const [userRecordings, skippedDocs] = await Promise.all([
       Para29Recording.find({ recorderName: userName }, 'ayatIndex'),
       Para29Skipped.find({ recorderName: userName }, 'ayatIndex')
     ]);
 
-    const recordedIndices = [...new Set(userRecordings.map(r => r.ayatIndex))];
-    const skippedIndices = [...new Set(skippedDocs.map(s => s.ayatIndex))];
+    const recordedSet = new Set(userRecordings.map(r => r.ayatIndex));
+    const skippedSurahSet = new Set(skippedDocs.map(s => {
+      const ayat = para29Ayats.find(a => a.index === s.ayatIndex);
+      return ayat ? ayat.surahNo : null;
+    }).filter(Boolean));
 
-    // Unrecorded = na recorded, na skipped
-    const unrecordedAyats = para29Ayats.filter(
-      ayat => !recordedIndices.includes(ayat.index) && !skippedIndices.includes(ayat.index)
-    );
+    // Saari unrecorded ayats (recorded nahi)
+    const unrecordedAyats = para29Ayats.filter(a => !recordedSet.has(a.index));
 
-    // Skipped mein se jo abhi bhi unrecorded hain (delete ke baad wapas aa sakti hain)
-    const pendingSkippedAyats = para29Ayats.filter(
-      ayat => skippedIndices.includes(ayat.index) && !recordedIndices.includes(ayat.index)
-    );
-
-    // Sab recorded + no skipped pending = complete
-    if (unrecordedAyats.length === 0 && pendingSkippedAyats.length === 0) {
+    if (unrecordedAyats.length === 0) {
       return res.json({
         ayats: [],
-        userRecorded: recordedIndices.length,
+        userRecorded: recordedSet.size,
         totalAyats: para29Ayats.length,
-        currentSurah: null,
-        hasSkipped: false
+        currentSurah: null
       });
     }
 
-    let groupAyats = [];
+    // Surahs jo unrecorded ayats rakhti hain
+    const allUnrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
+
+    // Pehle non-skipped surahs, phir skipped
+    const nonSkippedSurahs = allUnrecordedSurahs.filter(s => !skippedSurahSet.has(s));
+    const skippedUnrecordedSurahs = allUnrecordedSurahs.filter(s => skippedSurahSet.has(s));
+
+    let targetSurah;
     let isSkippedGroup = false;
 
-    if (pendingSkippedAyats.length > 0) {
-      // PRIORITY: skipped ayats pehle — unki surah ke sirf wahi ayats jo skip/unrecorded hain
-      isSkippedGroup = true;
-      const skippedSurahs = [...new Set(pendingSkippedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
-      const firstSkippedSurah = skippedSurahs[0];
-      // Us surah ki sirf wo ayats jo recorded nahi (skipped + fresh unrecorded dono)
-      groupAyats = para29Ayats.filter(
-        a => a.surahNo === firstSkippedSurah && !recordedIndices.includes(a.index)
-      );
+    if (nonSkippedSurahs.length > 0) {
+      targetSurah = nonSkippedSurahs[0];
     } else {
-      // Normal: pehli unrecorded surah ki sirf unrecorded ayats
-      const unrecordedSurahs = [...new Set(unrecordedAyats.map(a => a.surahNo))].sort((a, b) => a - b);
-      const nextSurah = unrecordedSurahs[0];
-      groupAyats = para29Ayats.filter(
-        a => a.surahNo === nextSurah && !recordedIndices.includes(a.index)
-      );
+      // Sab non-skipped record ho gayi — ab skipped dikhao (loop complete)
+      targetSurah = skippedUnrecordedSurahs[0];
+      isSkippedGroup = true;
     }
 
-    groupAyats.sort((a, b) => a.index - b.index);
+    // Us surah ki sirf unrecorded ayats
+    const groupAyats = unrecordedAyats
+      .filter(a => a.surahNo === targetSurah)
+      .sort((a, b) => a.index - b.index);
 
     const formattedAyats = groupAyats.map(ayat => ({
       ...ayat,
       uthmani_script: ayat.uthmani_script || '',
       indopak_script: ayat.indopak_script || '',
       text: ayat.uthmani_script || ayat.text || '',
-      isSkipped: skippedIndices.includes(ayat.index)
+      isSkipped: skippedSurahSet.has(ayat.surahNo)
     }));
 
     res.json({
       ayats: formattedAyats,
-      userRecorded: recordedIndices.length,
+      userRecorded: recordedSet.size,
       totalAyats: para29Ayats.length,
-      currentSurah: groupAyats[0]?.surahNo,
+      currentSurah: targetSurah,
       surahNameEn: groupAyats[0]?.surahNameEn || '',
       surahNameAr: groupAyats[0]?.surahNameAr || '',
       hasSkipped: isSkippedGroup,
-      skippedCount: pendingSkippedAyats.length
+      skippedCount: skippedUnrecordedSurahs.length
     });
   } catch (error) {
     console.error('Error fetching para29 bulk recording ayats:', error);
@@ -845,8 +839,7 @@ app.get('/api/para29-bulk/next', userAuth, async (req, res) => {
   }
 });
 
-// POST /api/para29-bulk/skip-surah — poori surah ki unrecorded ayats skip karo
-// Frontend "Move to Next Surah" button yahi call karta hai
+// POST /api/para29-bulk/skip-surah — surah ko skip karo (end mein aayegi)
 app.post('/api/para29-bulk/skip-surah', userAuth, async (req, res) => {
   try {
     const userName = req.user?.name;
@@ -854,24 +847,14 @@ app.post('/api/para29-bulk/skip-surah', userAuth, async (req, res) => {
     if (!userName) return res.status(401).json({ error: 'Not authenticated' });
     if (!surahNo) return res.status(400).json({ error: 'surahNo required' });
 
-    const para29Ayats = ayats.filter(a => a.juzNo === 29 && a.surahNo === parseInt(surahNo));
+    const surahNum = parseInt(surahNo);
+    const para29Ayats = ayats.filter(a => a.juzNo === 29 && a.surahNo === surahNum);
     if (para29Ayats.length === 0) {
       return res.status(400).json({ error: 'Surah not found in Para 29' });
     }
 
-    // Us user ki already recorded ayats nikalo
-    const userRecordings = await Para29Recording.find({ recorderName: userName }, 'ayatIndex');
-    const recordedIndices = new Set(userRecordings.map(r => r.ayatIndex));
-
-    // Sirf unrecorded ayats skip karo
-    const toSkip = para29Ayats.filter(a => !recordedIndices.has(a.index));
-
-    if (toSkip.length === 0) {
-      return res.json({ message: 'All ayats already recorded', skipped: 0 });
-    }
-
-    // Bulk upsert
-    const ops = toSkip.map(a => ({
+    // Us surah ki saari ayats ko skipped mark karo (upsert)
+    const ops = para29Ayats.map(a => ({
       updateOne: {
         filter: { ayatIndex: a.index, recorderName: userName },
         update: { $set: { ayatIndex: a.index, recorderName: userName, skippedAt: new Date() } },
@@ -880,7 +863,7 @@ app.post('/api/para29-bulk/skip-surah', userAuth, async (req, res) => {
     }));
     await Para29Skipped.bulkWrite(ops);
 
-    res.json({ message: 'Surah skipped', skipped: toSkip.length, surahNo });
+    res.json({ message: 'Surah skipped', surahNo: surahNum });
   } catch (err) {
     console.error('Error skipping surah:', err);
     res.status(500).json({ error: 'Failed to skip surah' });
